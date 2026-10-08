@@ -34,6 +34,7 @@ final class SidebarController {
         let host = SidebarHostingView(rootView: SidebarView(store: store, prefs: prefs, hover: hover, actions: actions))
         host.sizingOptions = []
         host.onHover = { [hover] point in hover.point = point }
+        host.isOverControl = { [hover] in hover.target != nil }
 
         let backdrop = WindowBackdropView(frame: CGRect(origin: .zero, size: size))
         glassView.cornerRadius = DesignTokens.sidebarCornerRadius

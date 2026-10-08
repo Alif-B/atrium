@@ -51,6 +51,11 @@ struct SidebarView: View {
 
     @State private var lensIndex: Int?
     @State private var lensVisible = false
+    // Drag-to-reorder: the held icon follows the pointer; the others slide aside as the order changes live.
+    @State private var draggingID: String?
+    @State private var dragStartIndex = 0
+    @State private var dragTranslation: CGFloat = 0
+    @State private var suppressClick = false
 
     /// The panel's content view is exactly the glass rail (NSGlassEffectView supplies the glass), so there is no outer inset.
     private let outerInset: CGFloat = 0
@@ -111,10 +116,10 @@ struct SidebarView: View {
                     isLaunching: store.launchingBundleIDs.contains(app.bundleIdentifier),
                     isMissing: store.isMissing(app),
                     isHovered: hover.target?.slot == .item(index),
-                    magnification: magnification(for: index),
+                    magnification: draggingID == app.bundleIdentifier ? DesignTokens.dragLiftScale : magnification(for: index),
                     badge: prefs.showBadges ? store.badges[app.bundleIdentifier] : nil,
                     edge: prefs.sidebarEdge,
-                    action: { actions.switchTo(app) },
+                    action: { if !suppressClick { actions.switchTo(app) } },
                     menu: ItemMenuActions(
                         open: { actions.switchTo(app) },
                         locate: { actions.locate(app) },
@@ -125,11 +130,53 @@ struct SidebarView: View {
                         quit: { actions.quit(app) },
                         toggleSnap: { store.update(bundleID: app.bundleIdentifier) { $0.snapWindow.toggle() } },
                         toggleOpenAtLogin: { store.update(bundleID: app.bundleIdentifier) { $0.openAtLogin.toggle() } }))
+                .offset(y: draggingID == app.bundleIdentifier ? dragOffset(for: index, metrics: metrics) : 0)
+                .shadow(color: .black.opacity(draggingID == app.bundleIdentifier ? 0.28 : 0), radius: 9, y: 4)
+                .zIndex(draggingID == app.bundleIdentifier ? 1 : 0)
+                .simultaneousGesture(reorderGesture(for: app, metrics: metrics))
             }
             UtilityButton(symbol: "plus", label: "Add App", isHovered: hover.target?.slot == .plus,
                           itemSize: metrics.itemSize, action: actions.showAddApps)
         }
         .background(alignment: .top) { lensFill(metrics: metrics) }
+        .animation(reduceMotion ? nil : Motion.reorder, value: store.apps.map(\.id))
+    }
+
+    // MARK: Reordering
+
+    /// Keeps the held icon under the pointer while its slot changes.
+    private func dragOffset(for index: Int, metrics: SidebarMetrics) -> CGFloat {
+        dragTranslation - CGFloat(index - dragStartIndex) * metrics.pitch
+    }
+
+    private func reorderGesture(for app: ManagedApp, metrics: SidebarMetrics) -> some Gesture {
+        DragGesture(minimumDistance: DesignTokens.dragStartDistance, coordinateSpace: .global)
+            .onChanged { value in
+                if draggingID == nil {
+                    guard let start = store.apps.firstIndex(where: { $0.bundleIdentifier == app.bundleIdentifier }) else { return }
+                    draggingID = app.bundleIdentifier
+                    dragStartIndex = start
+                    suppressClick = true
+                    hover.target = nil
+                }
+                guard draggingID == app.bundleIdentifier,
+                      let current = store.apps.firstIndex(where: { $0.bundleIdentifier == app.bundleIdentifier }) else { return }
+                dragTranslation = value.translation.height
+                let wanted = Int((CGFloat(dragStartIndex) + value.translation.height / metrics.pitch).rounded())
+                let target = min(max(wanted, 0), store.apps.count - 1)
+                if target != current {
+                    store.move(fromOffsets: IndexSet(integer: current), toOffset: target > current ? target + 1 : target)
+                    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+                }
+            }
+            .onEnded { _ in
+                withAnimation(reduceMotion ? nil : Motion.reorder) {
+                    draggingID = nil
+                    dragTranslation = 0
+                }
+                // The press that ended the drag must not count as a click on the icon.
+                Task { try? await Task.sleep(for: .milliseconds(200)); suppressClick = false }
+            }
     }
 
     /// Dock-style: the hovered icon grows most, its direct neighbours a little.

@@ -53,6 +53,10 @@ final class WindowBackdropView: NSView {
 /// because SwiftUI `.onHover` is unreliable while Atrium is inactive (which is almost always).
 final class SidebarHostingView<Content: View>: NSHostingView<Content> {
     var onHover: (@MainActor (CGPoint?) -> Void)?
+    /// True while the pointer is over an icon or button: a press there is a click or an icon drag, never a window drag.
+    var isOverControl: (@MainActor () -> Bool)?
+
+    override var mouseDownCanMoveWindow: Bool { !(isOverControl?() ?? false) }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
