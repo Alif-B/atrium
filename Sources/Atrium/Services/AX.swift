@@ -64,6 +64,12 @@ enum AX {
 
     static func isFullScreen(_ window: AXUIElement) -> Bool { bool(window, "AXFullScreen") == true }
 
+    /// Makes the app frontmost through Accessibility. Unlike `NSRunningApplication.activate()`, this works even when the
+    /// caller isn't the active app (cooperative activation lets only the active app hand over focus).
+    static func makeFrontmost(_ pid: pid_t) {
+        set(app(pid), kAXFrontmostAttribute, true as CFBoolean)
+    }
+
     static func raise(_ window: AXUIElement) {
         AXUIElementPerformAction(window, kAXRaiseAction as CFString)
         set(window, kAXMainAttribute, true as CFBoolean)

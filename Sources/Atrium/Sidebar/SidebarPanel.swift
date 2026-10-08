@@ -1,11 +1,19 @@
 import AppKit
+import OSLog
 import SwiftUI
 
 /// The main Atrium window: borderless (no title bar), movable by dragging any empty background, resizable from its edges.
-final class AtriumWindow: NSWindow {
+/// A *non-activating* panel: clicking it (an icon, the rail, a drag) neither activates Atrium nor brings its window in
+/// front of the app it shows. A normal window would jump in front for a few frames on every click (the "blip" between
+/// apps), then have to tuck itself back under the app.
+final class AtriumWindow: NSPanel {
     init(contentRect: NSRect) {
-        super.init(contentRect: contentRect, styleMask: [.borderless, .resizable, .miniaturizable, .closable],
+        super.init(contentRect: contentRect, styleMask: [.borderless, .resizable, .miniaturizable, .closable, .nonactivatingPanel],
                    backing: .buffered, defer: false)
+        isFloatingPanel = false                    // a normal-level window: other apps' windows still cover it
+        level = .normal
+        hidesOnDeactivate = false
+        becomesKeyOnlyIfNeeded = true
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
@@ -23,11 +31,38 @@ final class AtriumWindow: NSWindow {
     /// Called right after a mouse-down was handled (a click, or the end of a window drag). A click on an already-key window
     /// still brings it to the front without any key/activation notification, so this is the reliable hook.
     var onMouseDown: (@MainActor () -> Void)?
+    static let log = Logger(subsystem: "com.alif.atrium", category: "window")
 
     override func sendEvent(_ event: NSEvent) {
         super.sendEvent(event)
         if event.type == .leftMouseDown || event.type == .rightMouseDown { onMouseDown?() }
     }
+}
+
+/// The rail's own window. The window server brings any clicked window to the front before the app even sees the click,
+/// so if the rail were part of the main window, every click on an icon would put Atrium's whole window (and its empty
+/// workspace) in front of the app for a few frames. As a separate strip that overlaps nothing, being raised changes
+/// nothing on screen. It is attached to the main window (as a child) only while that window moves or resizes, so it tracks
+/// it exactly; at rest it is separate, because clicking an attached window raises the whole family.
+final class RailPanel: NSPanel {
+    init() {
+        super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        isFloatingPanel = false
+        level = .normal
+        hidesOnDeactivate = false
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        isMovable = false                          // drags on empty rail space move the main window instead
+        isReleasedWhenClosed = false
+        animationBehavior = .none
+        collectionBehavior = [.managed, .ignoresCycle]
+    }
+    /// The Atrium window this rail belongs to (drags on empty rail space move it).
+    weak var atriumWindow: NSWindow?
+
+    override var canBecomeKey: Bool { false }      // a click never takes keyboard focus from the app
+    override var canBecomeMain: Bool { false }
 }
 
 /// Rounded, softly translucent backdrop for the whole window. Visible in the gaps and while no app is snapped in.
@@ -56,7 +91,16 @@ final class SidebarHostingView<Content: View>: NSHostingView<Content> {
     /// True while the pointer is over an icon or button: a press there is a click or an icon drag, never a window drag.
     var isOverControl: (@MainActor () -> Bool)?
 
-    override var mouseDownCanMoveWindow: Bool { !(isOverControl?() ?? false) }
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    /// A press on empty rail space drags the whole Atrium window (the rail's parent); on an icon it's a click or a reorder.
+    override func mouseDown(with event: NSEvent) {
+        if !(isOverControl?() ?? false), let main = (window as? RailPanel)?.atriumWindow {
+            main.performDrag(with: event)
+            return
+        }
+        super.mouseDown(with: event)
+    }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 

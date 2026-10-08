@@ -14,6 +14,7 @@ final class SidebarController {
     private let hover = HoverState()
     private let labelPanel = HoverLabelPanel()
     private let glassView = NSGlassEffectView()
+    private let rail = RailPanel()
     private var observers: [NSObjectProtocol] = []
     private var screenTask: Task<Void, Never>?
     private var watchTimer: Timer?
@@ -29,6 +30,8 @@ final class SidebarController {
     /// Something about Atrium's own windows changed (one closed, focus moved, Atrium (de)activated): re-check that the
     /// selected app is still in front of Atrium's window. Also called once a second as a safety net.
     var onCheckOrder: (@MainActor () -> Void)?
+    /// A click on the main window itself (the backdrop around the app).
+    var onMainMouseDown: (@MainActor () -> Void)?
 
     init(store: AppStore, prefs: Preferences, actions: SidebarActions) {
         self.prefs = prefs
@@ -45,10 +48,12 @@ final class SidebarController {
         host.isOverControl = { [hover] in hover.target != nil }
 
         let backdrop = WindowBackdropView(frame: CGRect(origin: .zero, size: size))
+        window.contentView = backdrop
         glassView.cornerRadius = DesignTokens.sidebarCornerRadius
         glassView.contentView = host
-        backdrop.addSubview(glassView)
-        window.contentView = backdrop
+        glassView.autoresizingMask = [.width, .height]
+        rail.contentView = glassView
+        rail.atriumWindow = window
 
         hover.onTargetChange = { [weak self] target in self?.updateLabel(target) }
         prefs.onLayoutChange = { [weak self] in self?.relayout() }
@@ -68,6 +73,20 @@ final class SidebarController {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.scheduleOrderCheck() }
             })
+        }
+        // The rail is its own window: hide and show it with the main window.
+        observers.append(center.addObserver(forName: NSWindow.didMiniaturizeNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.rail.orderOut(nil) }
+        })
+        observers.append(center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.rail.orderOut(nil) }
+        })
+        observers.append(center.addObserver(forName: NSWindow.didDeminiaturizeNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.keepRailOnMain() }
+        })
+        window.onMouseDown = { [weak self] in                              // a click on the backdrop raised the main window
+            self?.keepRailOnMain()
+            self?.onMainMouseDown?()
         }
         for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -116,9 +135,17 @@ final class SidebarController {
         }
         let busy = NSEvent.pressedMouseButtons != 0 || window.inLiveResize || Date().timeIntervalSince(lastFrameChange) < 0.5
         if busy != watchingFast { scheduleWatch(fast: busy) }
+        // Attach the rail only while the window is actually moving or resizing (so it follows exactly).
+        let moving = window.inLiveResize || Date().timeIntervalSince(lastFrameChange) < 0.5
+        if moving != (rail.parent != nil) {
+            if moving { window.addChildWindow(rail, ordered: .above) } else { window.removeChildWindow(rail) }
+        }
         if !watchingFast {
             slowTicks += 1
-            if slowTicks % 10 == 0 { onCheckOrder?() }            // once a second: the safety net
+            if slowTicks % 10 == 0 {                              // once a second: the safety net
+                keepRailOnMain()
+                onCheckOrder?()
+            }
         }
     }
 
@@ -143,14 +170,28 @@ final class SidebarController {
     func show() {
         window.makeKeyAndOrderFront(nil)
         relayout()
+        keepRailOnMain()
     }
+
+    /// Main window right below the app it shows, rail right above the main window (where it sits).
+    func placeMain(below number: Int) {
+        window.order(.below, relativeTo: number)
+        keepRailOnMain()
+    }
+
+    private func keepRailOnMain() {
+        guard window.isVisible, !window.isMiniaturized else { return }
+        rail.order(.above, relativeTo: window.windowNumber)
+    }
+
+    var railFrame: CGRect { rail.frame }
 
     /// The rectangle (Cocoa screen coordinates) the active app's window should fill.
     var workspaceRect: CGRect { layout.workspace }
 
     func relayout() {
         layout = ScreenLayout.compute(visibleFrame: window.frame, edge: prefs.sidebarEdge)
-        glassView.frame = layout.glass.offsetBy(dx: -window.frame.minX, dy: -window.frame.minY)
+        if rail.frame != layout.glass { rail.setFrame(layout.glass, display: true) }
         window.invalidateShadow()
     }
 

@@ -150,6 +150,7 @@ final class WebAppManager {
     private func bringForward(_ window: AXUIElement, browser: NSRunningApplication, slot: String) async {
         store.activeBundleID = slot
         AX.raise(window)
+        AX.makeFrontmost(browser.processIdentifier)
         if NSApp.isActive { NSApp.yieldActivation(to: browser) }
         browser.activate()
         watchFocus(of: browser.processIdentifier)

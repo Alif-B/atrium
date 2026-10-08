@@ -91,9 +91,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sidebar.onBecameKey = { [weak self] in self?.keepWorkspaceVisible(restoreLast: true, fresh: true) }
             sidebar.onCheckOrder = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
             switcher.onShown = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
-            sidebar.window.onMouseDown = { [weak self] in self?.keepWorkspaceVisible(restoreLast: true, fresh: true) }
+            sidebar.onMainMouseDown = { [weak self] in self?.keepWorkspaceVisible(restoreLast: true, fresh: true) }
             snapper.onSnapped = { [weak self] in self?.keepWorkspaceVisible() }
-            if let id = LaunchOptions.debugFollow { runFollowDiagnostic(bundleID: id) } else { preloadAll() }
+            if LaunchOptions.debugDrag { runDragDiagnostic() }
+            else if let spec = LaunchOptions.debugClick { runClickDiagnostic(spec) }
+            else if let id = LaunchOptions.debugFollow { runFollowDiagnostic(bundleID: id) } else { preloadAll() }
             if LaunchOptions.debugSettings { showSettings() }
         }
     }
@@ -118,7 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let id, snapper.isPlaced(id), sidebar.window.isVisible else { return }
         // During drags this runs at up to 60 Hz: reuse the number found in the last second and skip the order read.
         if !fresh, let cached = orderCache, cached.slot == id, Date().timeIntervalSince(cached.at) < 1 {
-            sidebar.window.order(.below, relativeTo: cached.number)
+            sidebar.placeMain(below: cached.number)
             return
         }
         guard let found = snapper.order(of: id, against: sidebar.window.windowNumber) else {
@@ -127,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         orderCache = (id, found.number, Date())
         // Only touch the window order when Atrium is actually covering the app: an empty click costs one read, nothing more.
-        if found.atriumInFront { sidebar.window.order(.below, relativeTo: found.number) }
+        if found.atriumInFront { sidebar.placeMain(below: found.number) }
     }
 
     /// Dock-icon click brings the main window back (it can be closed with ⌘W without quitting).
@@ -168,6 +170,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: Diagnostics
+
+    private func runDragDiagnostic() {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            let glass = sidebar.layout.glass
+            let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
+            // Empty rail space: just above the hairline that separates the list from the gear.
+            let cocoaY = glass.minY + SidebarMetrics.bottomBlockHeight + DesignTokens.sidebarPadding + 12
+            let start = CGPoint(x: glass.midX, y: primaryTop - cocoaY)
+            let before = sidebar.window.frame
+            log.notice("diag: dragging empty rail space at \(NSStringFromPoint(start), privacy: .public)")
+            ClickDiagnostic.drag(from: start, by: 160) {
+                Task { @MainActor in
+                    let after = self.sidebar.window.frame
+                    let railX = self.sidebar.railFrame.minX - after.minX
+                    log.notice("diag drag: window moved by \(Int(after.minX - before.minX)) pt; rail sits \(Int(railX)) pt from the window's left edge (expected \(Int(DesignTokens.gap)))")
+                }
+            }
+        }
+    }
+
+    private func runClickDiagnostic(_ spec: String) {
+        let ids = spec.split(separator: ":").map(String.init)
+        guard ids.count == 2 else { return }
+        Task { @MainActor in
+            preloadAll()
+            try? await Task.sleep(for: .seconds(14))                      // let everything get placed
+            guard let from = store.apps.first(where: { $0.bundleIdentifier == ids[0] }),
+                  let toIndex = store.apps.firstIndex(where: { $0.bundleIdentifier == ids[1] }) else { log.notice("diag: apps not found"); return }
+            switcher.switchTo(from)
+            try? await Task.sleep(for: .seconds(2))
+            let glass = sidebar.layout.glass
+            let metrics = SidebarMetrics.fit(count: store.apps.count, glassHeight: glass.height)
+            let top = metrics.itemsTop(count: store.apps.count, glassHeight: glass.height)
+            let cocoaY = glass.maxY - top - CGFloat(toIndex) * metrics.pitch - metrics.itemSize / 2
+            let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
+            let icon = CGPoint(x: glass.midX, y: primaryTop - cocoaY)
+            let ws = sidebar.workspaceRect
+            let wsCenter = CGPoint(x: ws.midX, y: primaryTop - ws.midY)
+            log.notice("diag: clicking \(ids[1], privacy: .public) while \(ids[0], privacy: .public) is shown")
+            ClickDiagnostic.run(iconCenter: icon, atrium: sidebar.window.windowNumber, workspaceCenter: wsCenter)
+        }
+    }
 
     /// Developer aid: opens an app, then nudges Atrium's window so the follow behaviour can be observed from outside.
     private func runFollowDiagnostic(bundleID: String) {

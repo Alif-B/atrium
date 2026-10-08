@@ -55,6 +55,7 @@ final class AppSwitcher {
         prefs.lastActiveBundleID = id
         if AX.bool(window, kAXMinimizedAttribute) == true { AX.set(window, kAXMinimizedAttribute, false as CFBoolean) }
         AX.raise(window)                                  // its own front window, so activation brings exactly this one
+        AX.makeFrontmost(running.processIdentifier)
         if NSApp.isActive { NSApp.yieldActivation(to: running) }
         running.activate()
         onShown?()
