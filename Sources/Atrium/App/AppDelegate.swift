@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onManagedActivated: { [weak self] id in self?.managedAppActivated(id) },
                 onTerminated: { [weak self] pid in self?.snapper?.appTerminated(pid: pid) })
             sidebar.onFrameChange = { [weak self] in self?.snapper?.follow() }
+            if let id = LaunchOptions.debugFollow { runFollowDiagnostic(bundleID: id) }
         }
     }
 
@@ -67,6 +68,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sidebar.show()
         switcher?.bringLastActiveForward()
         return false
+    }
+
+    // MARK: Diagnostics
+
+    /// Developer aid: opens an app, then nudges Atrium's window so the follow behaviour can be observed from outside.
+    private func runFollowDiagnostic(bundleID: String) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1))
+            guard let app = store.apps.first(where: { $0.bundleIdentifier == bundleID }) else { log.notice("diag: app not in sidebar"); return }
+            log.notice("diag: switching to \(bundleID, privacy: .public)")
+            switcher.switchTo(app)
+            try? await Task.sleep(for: .seconds(6))
+            for step in 1...10 {
+                var f = sidebar.window.frame
+                f.origin.x += 20
+                sidebar.window.setFrame(f, display: true)
+                log.notice("diag: moved Atrium to \(NSStringFromRect(f), privacy: .public) step \(step)")
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
     }
 
     // MARK: Actions

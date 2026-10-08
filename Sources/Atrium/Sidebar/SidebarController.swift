@@ -15,7 +15,7 @@ final class SidebarController {
     private let glassView = NSGlassEffectView()
     private var observers: [NSObjectProtocol] = []
     private var screenTask: Task<Void, Never>?
-    private var watchTask: Task<Void, Never>?
+    private var watchTimer: Timer?
     private var lastWatchedFrame: CGRect = .zero
 
     /// Called after the window moved, resized or changed display (debounced by AppKit's live-resize end).
@@ -63,18 +63,22 @@ final class SidebarController {
         startFrameWatcher()
     }
 
-    /// A borderless window dragged by its background doesn't reliably post move notifications, so also watch the frame:
-    /// ~60 Hz while a mouse button is down (a drag may be in progress), slowly otherwise (catches moves by other tools).
+    /// A borderless window dragged by its background doesn't reliably post move notifications, and while the user drags,
+    /// AppKit runs the main thread in "event tracking" mode where plain timers and async tasks don't fire. A timer
+    /// registered for the *common* run-loop modes keeps firing, so the snapped app can follow live. The check is just a
+    /// frame comparison (30 Hz), so it costs next to nothing.
     private func startFrameWatcher() {
         lastWatchedFrame = window.frame
-        watchTask = Task { [weak self] in
-            while !Task.isCancelled {
-                let dragging = NSEvent.pressedMouseButtons != 0
-                try? await Task.sleep(for: dragging ? .milliseconds(16) : .milliseconds(250))
-                guard let self else { return }
-                if self.window.frame != self.lastWatchedFrame { self.frameChanged() }
-            }
+        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkFrame() }
         }
+        timer.tolerance = 0.01
+        RunLoop.main.add(timer, forMode: .common)
+        watchTimer = timer
+    }
+
+    private func checkFrame() {
+        if window.frame != lastWatchedFrame { frameChanged() }
     }
 
     func show() {

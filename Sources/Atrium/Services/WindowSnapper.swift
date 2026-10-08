@@ -45,12 +45,13 @@ final class WindowSnapper {
             try? await Task.sleep(for: .milliseconds(150))
         }
         guard !Task.isCancelled else { return }
-        guard let window else { log.debug("no window for pid \(pid) before timeout"); return }
+        guard let window else { log.notice("no window for pid \(pid) before timeout"); return }
         guard !AX.isFullScreen(window) else { log.debug("pid \(pid) is full screen; not snapping"); return }
 
         if AX.bool(window, kAXMinimizedAttribute) == true { AX.set(window, kAXMinimizedAttribute, false as CFBoolean) }
         apply(window, app: app)
         snapped[pid] = window
+        log.notice("snap complete for pid \(pid)")
         AX.raise(window)
 
         // Electron apps restore their saved bounds shortly after showing a window: re-check twice.
@@ -67,13 +68,16 @@ final class WindowSnapper {
            abs(current.minX - target.minX) < 1, abs(current.minY - target.minY) < 1,
            abs(current.width - target.width) < 1, abs(current.height - target.height) < 1 { return }
         AX.setFrame(window, app: app, to: target)
-        log.debug("snapped to \(NSStringFromRect(target), privacy: .public)")
+        log.notice("snapped to \(NSStringFromRect(target), privacy: .public)")
     }
 
     /// Atrium moved or resized: carry the active app's window along (live, throttled, with a trailing final apply).
     func follow() {
-        guard store.isAXTrusted, let id = store.activeBundleID,
-              let pid = Launcher.runningApp(bundleID: id)?.processIdentifier, let window = snapped[pid] else { return }
+        guard store.isAXTrusted else { log.notice("follow: AX not trusted"); return }
+        guard let id = store.activeBundleID else { log.notice("follow: no active app"); return }
+        guard let pid = Launcher.runningApp(bundleID: id)?.processIdentifier else { log.notice("follow: \(id, privacy: .public) not running"); return }
+        guard let window = snapped[pid] else { log.notice("follow: pid \(pid) was never snapped (snapped: \(self.snapped.keys.map { String($0) }.joined(separator: ","), privacy: .public))"); return }
+        log.notice("follow: pid \(pid) target \(NSStringFromRect(self.axTarget()), privacy: .public) current \(NSStringFromRect(AX.frame(window) ?? .zero), privacy: .public)")
         let app = AX.app(pid)
         if Date().timeIntervalSince(lastFollow) > 0.04 {
             lastFollow = Date()
