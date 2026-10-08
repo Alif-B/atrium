@@ -3,6 +3,8 @@ import SwiftUI
 /// Named animations (docs/PLAN.md §7.8). `var` rather than `let` keeps Swift 6 concurrency checks quiet.
 enum Motion {
     static var lensSlide: Animation { .snappy(duration: 0.32) }
+    /// Dock-style magnification of the hovered icon and its neighbours.
+    static var magnify: Animation { .spring(duration: 0.32, bounce: 0.32) }
     static var hoverIn: Animation { .easeOut(duration: 0.12) }
     static var hoverOut: Animation { .easeIn(duration: 0.10) }
     static var label: Animation { .smooth(duration: 0.18) }

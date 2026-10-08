@@ -24,5 +24,7 @@ enum DesignTokens {
     static let hairlineInset: CGFloat = 14
     static let hairlineSpacing: CGFloat = 8
     static let minItemScale: CGFloat = 0.75
+    static let magnifyHovered: CGFloat = 1.2        // hovered icon
+    static let magnifyNeighbour: CGFloat = 1.07     // icons directly above/below it
     static let amberDotSize: CGFloat = 6
 }

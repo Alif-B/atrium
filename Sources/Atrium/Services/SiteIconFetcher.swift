@@ -13,13 +13,34 @@ enum SiteIconFetcher {
     }
 
     /// Returns the path of a 512×512 PNG written to Application Support.
+    /// Prefers the favicon Edge already has for the site (what the user actually sees), then the network.
     static func makeIcon(for site: URL, name: String, id: String) async -> String? {
+        if let path = await iconFromBrowser(for: site, name: name, id: id) { return path }
         let fetched = await fetchBestImage(for: site)
         let png = await MainActor.run { render(fetched.map { ($0.image, $0.fullBleed) }, name: name) }
-        guard let png else { return nil }
+        return png.flatMap { write($0, id: id) }
+    }
+
+    /// Only Edge's stored favicon; nil if Edge hasn't recorded one for this site yet.
+    static func iconFromBrowser(for site: URL, name: String, id: String) async -> String? {
+        guard let stored = BrowserFavicons.edgeIcon(for: site), var image = NSImage(data: stored.data), image.isValid else { return nil }
+        var pixels = image.representations.map(\.pixelsWide).max() ?? Int(image.size.width)
+        // Edge keeps only small bitmaps; the original file (often a multi-size .ico or a large PNG) may be sharper.
+        if pixels < 120, let source = stored.sourceURL,
+           let (data, _) = try? await URLSession(configuration: .ephemeral).data(from: source),
+           let original = NSImage(data: data), original.isValid {
+            let originalPixels = original.representations.map(\.pixelsWide).max() ?? 0
+            if originalPixels > pixels { image = original; pixels = originalPixels }
+        }
+        let png = await MainActor.run { render((image, pixels >= 120), name: name) }
+        return png.flatMap { write($0, id: id) }
+    }
+
+    /// A new file name each time, so cached images of the old icon are never reused.
+    private static func write(_ png: Data, id: String) -> String? {
         do {
             try FileManager.default.createDirectory(at: iconsDirectory, withIntermediateDirectories: true)
-            let url = iconsDirectory.appendingPathComponent("\(id).png")
+            let url = iconsDirectory.appendingPathComponent("\(id)-\(Int(Date().timeIntervalSince1970)).png")
             try png.write(to: url, options: .atomic)
             return url.path
         } catch {

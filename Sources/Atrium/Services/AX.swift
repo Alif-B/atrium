@@ -46,6 +46,22 @@ enum AX {
     }
     private static func area(_ r: CGRect?) -> CGFloat { (r?.width ?? 0) * (r?.height ?? 0) }
 
+    /// Presses the first enabled menu-bar item whose title matches (e.g. Edge's "Reload This Page"). Acts on the app's
+    /// focused window, like choosing it from the menu.
+    @discardableResult
+    static func pressMenuItem(in pid: pid_t, where matches: (String) -> Bool) -> Bool {
+        guard let bar = element(app(pid), kAXMenuBarAttribute) else { return false }
+        for barItem in elements(bar, kAXChildrenAttribute) {
+            for menu in elements(barItem, kAXChildrenAttribute) {
+                for item in elements(menu, kAXChildrenAttribute) {
+                    guard let title = string(item, kAXTitleAttribute), matches(title), bool(item, kAXEnabledAttribute) != false else { continue }
+                    return AXUIElementPerformAction(item, kAXPressAction as CFString) == .success
+                }
+            }
+        }
+        return false
+    }
+
     static func isFullScreen(_ window: AXUIElement) -> Bool { bool(window, "AXFullScreen") == true }
 
     static func raise(_ window: AXUIElement) {

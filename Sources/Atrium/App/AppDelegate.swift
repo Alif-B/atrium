@@ -37,7 +37,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             quit: { [weak self] app in
                 if app.isWebApp { self?.webApps?.closeWindow(app) } else { Launcher.runningApp(bundleID: app.bundleIdentifier)?.terminate() }
-            })
+            },
+            reload: { [weak self] app in self?.webApps?.reload(app) })
         sidebar = SidebarController(store: store, prefs: prefs, actions: actions)
         sidebar.show()
         if !LaunchOptions.demo {
@@ -69,7 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sidebar.onBecameKey = { [weak self] in self?.keepWorkspaceVisible() }
             sidebar.window.onMouseDown = { [weak self] in self?.keepWorkspaceVisible() }
             snapper.onSnapped = { [weak self] in self?.keepWorkspaceVisible() }
-            if let id = LaunchOptions.debugFollow { runFollowDiagnostic(bundleID: id) }
+            if let id = LaunchOptions.debugFollow { runFollowDiagnostic(bundleID: id) } else { preloadAll() }
+            if LaunchOptions.debugSettings { showSettings() }
         }
     }
 
@@ -98,6 +100,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sidebar.show()
         switcher?.bringLastActiveForward()
         return false
+    }
+
+    // MARK: Startup
+
+    /// Pull every sidebar app into Atrium at launch, so the first click on each one is instant:
+    /// running apps are placed quietly behind, closed apps are launched in the background, web apps get (or re-find)
+    /// their windows. Finally the last-used app comes to the front.
+    private func preloadAll() {
+        guard store.isAXTrusted, let snapper, let webApps else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))      // let the window and monitors settle
+            // Native apps in parallel (each may wait for its window), then web apps one by one.
+            var jobs: [Task<Void, Never>] = []
+            for app in store.apps where !app.isWebApp && app.snapWindow {
+                guard let url = store.resolvedURL(for: app) else { continue }
+                let id = app.bundleIdentifier
+                jobs.append(Task { @MainActor in
+                    var running = Launcher.runningApp(bundleID: id)
+                    let launching = running == nil
+                    if launching { running = try? await Launcher.open(url, activate: false) }
+                    guard let pid = running?.processIdentifier else { return }
+                    await snapper.snapAndWait(slot: id, pid: pid, launching: launching, raise: false)
+                })
+            }
+            for job in jobs { await job.value }
+            await webApps.preload(store.apps)
+            log.notice("startup preload finished")
+            switcher.bringLastActiveForward()
+        }
     }
 
     // MARK: Diagnostics
@@ -160,7 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showSettings() {
         if settingsWindow == nil {
-            settingsWindow = SettingsWindowController(store: store, showAddApps: { [weak self] in self?.showAddApps() })
+            settingsWindow = SettingsWindowController(store: store, prefs: prefs, showAddApps: { [weak self] in self?.showAddApps() })
         }
         settingsWindow?.present()
     }

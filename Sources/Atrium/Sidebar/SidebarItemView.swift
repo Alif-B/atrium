@@ -9,6 +9,17 @@ struct SidebarMetrics {
     var pitch: CGFloat { itemSize + spacing }
 
     /// Items shrink (down to 0.75) when they don't fit, like the Dock. Fixed chrome: + cell, hairline block, gear cell.
+    /// Fixed block under the list: hairline (with its spacing) + gear cell.
+    static var bottomBlockHeight: CGFloat { 2 * DesignTokens.hairlineSpacing + 1 + DesignTokens.itemSize }
+
+    /// Where the (vertically centred) list starts, measured from the top of the glass. Mirrors the rail's
+    /// Spacer / list / Spacer layout so hover hit-testing lines up with what is drawn.
+    func itemsTop(count: Int, glassHeight: CGFloat) -> CGFloat {
+        let stack = CGFloat(count + 1) * itemSize + CGFloat(count) * spacing            // apps + the "+" button
+        let available = glassHeight - 2 * DesignTokens.sidebarPadding - Self.bottomBlockHeight
+        return DesignTokens.sidebarPadding + max(0, (available - stack) / 2)
+    }
+
     static func fit(count: Int, glassHeight: CGFloat) -> SidebarMetrics {
         guard count > 0 else { return SidebarMetrics(scale: 1) }
         let fixed = 2 * DesignTokens.sidebarPadding
@@ -75,6 +86,7 @@ struct ItemMenuActions {
     var open: () -> Void
     var locate: () -> Void
     var showInFinder: () -> Void
+    var reload: () -> Void
     var remove: () -> Void
     var hide: () -> Void
     var quit: () -> Void
@@ -91,6 +103,8 @@ struct SidebarItemView: View {
     let isLaunching: Bool
     let isMissing: Bool
     let isHovered: Bool
+    /// 1.0 normally; larger when this icon (or a neighbour) is hovered.
+    let magnification: CGFloat
     let badge: BadgeText?
     let edge: SidebarEdge
     let action: () -> Void
@@ -99,14 +113,12 @@ struct SidebarItemView: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                RoundedRectangle(cornerRadius: DesignTokens.lensCornerRadius * metrics.scale, style: .continuous)
-                    .fill(Color.primary.opacity(0.08))
-                    .opacity(isHovered && !isActive ? 1 : 0)
-                    .animation(isHovered ? Motion.hoverIn : Motion.hoverOut, value: isHovered)
                 Image(nsImage: icon)
                     .resizable()
                     .interpolation(.high)
                     .frame(width: metrics.iconSize, height: metrics.iconSize)
+                    .scaleEffect(magnification)
+                    .animation(Motion.magnify, value: magnification)
                     .opacity(isMissing ? 0.4 : 1)
                 if isMissing {
                     Image(systemName: "questionmark.circle.fill")
@@ -141,6 +153,7 @@ struct SidebarItemView: View {
                 Button("Remove from Sidebar", role: .destructive, action: menu.remove)
             } else {
                 if !isRunning { Button("Open", action: menu.open); Divider() }
+                if app.isWebApp && isRunning { Button("Reload Page", action: menu.reload); Divider() }
                 Toggle("Snap Window When Opened", isOn: Binding(get: { app.snapWindow }, set: { _ in menu.toggleSnap() }))
                 Toggle("Open at Login", isOn: Binding(get: { app.openAtLogin }, set: { _ in menu.toggleOpenAtLogin() }))
                 if !app.isWebApp { Button("Show in Finder", action: menu.showInFinder) }

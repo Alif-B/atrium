@@ -10,6 +10,7 @@ struct SidebarActions {
     var remove: @MainActor (ManagedApp) -> Void
     var hide: @MainActor (ManagedApp) -> Void
     var quit: @MainActor (ManagedApp) -> Void
+    var reload: @MainActor (ManagedApp) -> Void
 }
 
 private struct UtilityButton: View {
@@ -72,6 +73,7 @@ struct SidebarView: View {
 
     private func rail(metrics: SidebarMetrics) -> some View {
         let content = VStack(spacing: 0) {
+            Spacer(minLength: 0)                       // equal spacers: the app list sits vertically centred
             itemsStack(metrics: metrics)
             Spacer(minLength: 0)
             Rectangle()
@@ -109,6 +111,7 @@ struct SidebarView: View {
                     isLaunching: store.launchingBundleIDs.contains(app.bundleIdentifier),
                     isMissing: store.isMissing(app),
                     isHovered: hover.target?.slot == .item(index),
+                    magnification: magnification(for: index),
                     badge: prefs.showBadges ? store.badges[app.bundleIdentifier] : nil,
                     edge: prefs.sidebarEdge,
                     action: { actions.switchTo(app) },
@@ -116,6 +119,7 @@ struct SidebarView: View {
                         open: { actions.switchTo(app) },
                         locate: { actions.locate(app) },
                         showInFinder: { actions.showInFinder(app) },
+                        reload: { actions.reload(app) },
                         remove: { actions.remove(app) },
                         hide: { actions.hide(app) },
                         quit: { actions.quit(app) },
@@ -126,6 +130,16 @@ struct SidebarView: View {
                           itemSize: metrics.itemSize, action: actions.showAddApps)
         }
         .background(alignment: .top) { lensFill(metrics: metrics) }
+    }
+
+    /// Dock-style: the hovered icon grows most, its direct neighbours a little.
+    private func magnification(for index: Int) -> CGFloat {
+        guard !reduceMotion, case .item(let hovered)? = hover.target?.slot else { return 1 }
+        switch abs(index - hovered) {
+        case 0: return DesignTokens.magnifyHovered
+        case 1: return DesignTokens.magnifyNeighbour
+        default: return 1
+        }
     }
 
     private var gearButton: some View {
@@ -188,10 +202,11 @@ struct SidebarView: View {
                                        centerYInPanel: panelTop + gearTop + DesignTokens.itemSize / 2)
             return
         }
-        let local = y - DesignTokens.sidebarPadding
+        let itemsTop = metrics.itemsTop(count: store.apps.count, glassHeight: glassHeight)
+        let local = y - itemsTop
         guard local >= 0 else { hover.target = nil; return }
         let index = Int(local / metrics.pitch)
-        let centerY = panelTop + DesignTokens.sidebarPadding + CGFloat(index) * metrics.pitch + metrics.itemSize / 2
+        let centerY = panelTop + itemsTop + CGFloat(index) * metrics.pitch + metrics.itemSize / 2
         if index < store.apps.count {
             hover.target = HoverTarget(slot: .item(index), title: store.apps[index].displayName, centerYInPanel: centerY)
         } else if index == store.apps.count {

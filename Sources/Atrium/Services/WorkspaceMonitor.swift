@@ -13,7 +13,6 @@ final class WorkspaceMonitor {
     private var observers: [NSObjectProtocol] = []
     /// For apps that host several sidebar items (a browser with web apps): which item is in front, if any.
     var slotResolver: (@MainActor (String) -> String?)?
-    private var pidByBundleID: [String: pid_t] = [:]
     private let onTerminated: @MainActor (pid_t) -> Void
 
     init(store: AppStore, prefs: Preferences, switcher: AppSwitcher, onManagedActivated: @escaping @MainActor (String) -> Void,
@@ -25,30 +24,33 @@ final class WorkspaceMonitor {
         self.onManagedActivated = onManagedActivated
 
         let runningApps = NSWorkspace.shared.runningApplications
-        for app in runningApps { if let id = app.bundleIdentifier { pidByBundleID[id] = app.processIdentifier } }
         store.runningBundleIDs = Set(runningApps.compactMap(\.bundleIdentifier))
         if let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier { handleActivate(front) }
 
         let center = NSWorkspace.shared.notificationCenter
-        func observe(_ name: NSNotification.Name, _ handler: @escaping @MainActor (String) -> Void) {
+        func observe(_ name: NSNotification.Name, _ handler: @escaping @MainActor (String, pid_t) -> Void) {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { note in
-                // Extract Sendable values before hopping into the main-actor closure.
-                let id = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
-                MainActor.assumeIsolated { if let id { handler(id) } }
+                // Extract Sendable values before hopping into the main-actor closure. Use the notification's own
+                // process: an app can briefly have two (e.g. the helper instance used to open an Edge web app).
+                let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                let id = app?.bundleIdentifier
+                let pid = app?.processIdentifier ?? 0
+                MainActor.assumeIsolated { if let id { handler(id, pid) } }
             })
         }
-        observe(NSWorkspace.didLaunchApplicationNotification) { [weak self] id in
+        observe(NSWorkspace.didLaunchApplicationNotification) { [weak self] id, _ in
             self?.store.runningBundleIDs.insert(id)
             self?.store.launchingBundleIDs.remove(id)
-            if let app = Launcher.runningApp(bundleID: id) { self?.pidByBundleID[id] = app.processIdentifier }
         }
-        observe(NSWorkspace.didTerminateApplicationNotification) { [weak self] id in
-            if let pid = self?.pidByBundleID[id] { self?.onTerminated(pid) }
+        observe(NSWorkspace.didTerminateApplicationNotification) { [weak self] id, pid in
+            self?.onTerminated(pid)
+            // Only "not running" if no other instance of that app is still alive.
+            guard Launcher.runningApp(bundleID: id) == nil else { return }
             self?.store.runningBundleIDs.remove(id)
             self?.store.launchingBundleIDs.remove(id)
             self?.store.badges[id] = nil
         }
-        observe(NSWorkspace.didActivateApplicationNotification) { [weak self] id in self?.handleActivate(id) }
+        observe(NSWorkspace.didActivateApplicationNotification) { [weak self] id, _ in self?.handleActivate(id) }
     }
 
     private func handleActivate(_ id: String) {

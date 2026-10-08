@@ -12,7 +12,10 @@ enum Launcher {
         return try await NSWorkspace.shared.openApplication(at: url, configuration: config)
     }
 
+    /// The live, longest-running instance (an app can briefly have a second, short-lived helper instance).
     static func runningApp(bundleID: String) -> NSRunningApplication? {
-        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .filter { !$0.isTerminated }
+            .min { ($0.launchDate ?? .distantFuture) < ($1.launchDate ?? .distantFuture) }
     }
 }

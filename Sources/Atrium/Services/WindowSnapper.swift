@@ -19,7 +19,7 @@ final class WindowSnapper {
     private let store: AppStore
     private let workspaceRect: @MainActor () -> CGRect          // Cocoa screen coordinates
     private var placed: [String: Placed] = [:]
-    private var task: Task<Void, Never>?
+    private var tasks: [String: Task<Void, Never>] = [:]
     private var followTask: Task<Void, Never>?
     private let liveMover = LiveMover()
     /// Last size we asked the active window to take; while it stays the same, live moves send position only.
@@ -91,13 +91,19 @@ final class WindowSnapper {
     }
 
     /// Native apps: find the app's main window (waiting if it is launching or reopening) and fit it.
-    func snap(slot: String, pid: pid_t, launching: Bool) {
+    /// `raise: false` places it quietly behind (used when preloading everything at startup).
+    func snap(slot: String, pid: pid_t, launching: Bool, raise: Bool = true) {
         guard store.isAXTrusted else { return }
-        task?.cancel()
-        task = Task { await run(slot: slot, pid: pid, launching: launching) }
+        tasks[slot]?.cancel()
+        tasks[slot] = Task { await run(slot: slot, pid: pid, launching: launching, raise: raise) }
     }
 
-    private func run(slot: String, pid: pid_t, launching: Bool) async {
+    /// Awaitable variant (startup preloading places apps one by one).
+    func snapAndWait(slot: String, pid: pid_t, launching: Bool, raise: Bool) async {
+        await run(slot: slot, pid: pid, launching: launching, raise: raise)
+    }
+
+    private func run(slot: String, pid: pid_t, launching: Bool, raise: Bool) async {
         let app = AX.app(pid)
         let deadline = Date().addingTimeInterval(launching ? 20 : 5)
         var window: AXUIElement?
@@ -107,11 +113,11 @@ final class WindowSnapper {
         }
         guard !Task.isCancelled else { return }
         guard let window else { log.notice("no window for \(slot, privacy: .public) before timeout"); return }
-        await place(slot: slot, pid: pid, window: window)
+        await place(slot: slot, pid: pid, window: window, raise: raise)
     }
 
     /// A known window (web apps): fit it, guard it, and track it under `slot`.
-    func place(slot: String, pid: pid_t, window: AXUIElement) async {
+    func place(slot: String, pid: pid_t, window: AXUIElement, raise: Bool = true) async {
         guard store.isAXTrusted else { return }
         guard !AX.isFullScreen(window) else { log.debug("\(slot, privacy: .public) is full screen; not snapping"); return }
         if AX.bool(window, kAXMinimizedAttribute) == true { AX.set(window, kAXMinimizedAttribute, false as CFBoolean) }
@@ -123,8 +129,10 @@ final class WindowSnapper {
             guardWindow(window, pid: pid, slot: slot)
         }
         log.notice("placed \(slot, privacy: .public)")
-        AX.raise(window)
-        onSnapped?()
+        if raise {
+            AX.raise(window)
+            onSnapped?()
+        }
 
         // Electron/Chromium apps restore their saved bounds shortly after showing a window: re-check twice.
         for delay in [300, 700] {

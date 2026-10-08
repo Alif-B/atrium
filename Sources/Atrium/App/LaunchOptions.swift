@@ -9,4 +9,6 @@ enum LaunchOptions {
     static let debugFollow: String? = CommandLine.arguments.first { $0.hasPrefix("--debug-follow=") }.map { String($0.dropFirst(15)) }
     /// With `--debug-follow`: instead of moving the window, simulate a click that brings Atrium in front of the app.
     static let debugOrder = CommandLine.arguments.contains("--debug-order")
+    /// Opens the Settings window at launch (used to verify it opens).
+    static let debugSettings = CommandLine.arguments.contains("--debug-settings")
 }
