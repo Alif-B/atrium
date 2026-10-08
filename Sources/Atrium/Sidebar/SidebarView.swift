@@ -84,7 +84,7 @@ struct SidebarView: View {
             Button("Settings…") { actions.showSettings() }
         }
 
-        content
+        return content
             .overlay {
                 if contrast == .increased {
                     RoundedRectangle(cornerRadius: DesignTokens.sidebarCornerRadius, style: .continuous)
