@@ -11,6 +11,7 @@ struct SidebarActions {
     var hide: @MainActor (ManagedApp) -> Void
     var quit: @MainActor (ManagedApp) -> Void
     var reload: @MainActor (ManagedApp) -> Void
+    var edit: @MainActor (ManagedApp) -> Void
 }
 
 private struct UtilityButton: View {
@@ -125,6 +126,7 @@ struct SidebarView: View {
                         locate: { actions.locate(app) },
                         showInFinder: { actions.showInFinder(app) },
                         reload: { actions.reload(app) },
+                        edit: { actions.edit(app) },
                         remove: { actions.remove(app) },
                         hide: { actions.hide(app) },
                         quit: { actions.quit(app) },

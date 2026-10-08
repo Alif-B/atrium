@@ -18,8 +18,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var webApps: WebAppManager?
     private var addAppsWindow: HostingWindowController?
     private var settingsWindow: SettingsWindowController?
+    private var editWebAppWindow: HostingWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let spec = LaunchOptions.debugIcon {
+            let parts = spec.split(separator: ":", maxSplits: 1).map(String.init)
+            Task { @MainActor in
+                if parts.count == 2, let image = NSImage(contentsOfFile: parts[0]),
+                   let path = await SiteIconFetcher.makeIcon(from: image, name: "Test", id: "debug-icon") {
+                    try? FileManager.default.copyItem(atPath: path, toPath: parts[1])
+                    try? FileManager.default.removeItem(atPath: path)
+                }
+                NSApp.terminate(nil)
+            }
+            return
+        }
         NSApp.mainMenu = MainMenu.build(settingsTarget: self, settingsAction: #selector(openSettings))
         prefs = Preferences()
         store = LaunchOptions.demo ? AppStore.demo() : AppStore.persistent()
@@ -38,7 +51,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             quit: { [weak self] app in
                 if app.isWebApp { self?.webApps?.closeWindow(app) } else { Launcher.runningApp(bundleID: app.bundleIdentifier)?.terminate() }
             },
-            reload: { [weak self] app in self?.webApps?.reload(app) })
+            reload: { [weak self] app in self?.webApps?.reload(app) },
+            edit: { [weak self] app in self?.showEditWebApp(app) })
         sidebar = SidebarController(store: store, prefs: prefs, actions: actions)
         sidebar.show()
         if !LaunchOptions.demo {
@@ -191,9 +205,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showSettings() {
         if settingsWindow == nil {
-            settingsWindow = SettingsWindowController(store: store, prefs: prefs, showAddApps: { [weak self] in self?.showAddApps() })
+            settingsWindow = SettingsWindowController(store: store, prefs: prefs, showAddApps: { [weak self] in self?.showAddApps() },
+                                                      editWebApp: { [weak self] app in self?.showEditWebApp(app) })
         }
         settingsWindow?.present()
+    }
+
+    private func showEditWebApp(_ app: ManagedApp) {
+        editWebAppWindow?.dismiss()
+        let controller = HostingWindowController(
+            title: "Edit \(app.displayName)", size: NSSize(width: 440, height: 300), transparentTitlebar: false,
+            rootView: EditWebAppView(store: store, app: app, onDone: { [weak self] in self?.editWebAppWindow?.dismiss() }))
+        editWebAppWindow = controller
+        controller.present()
     }
 
     private func showAddApps() {

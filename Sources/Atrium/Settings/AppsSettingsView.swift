@@ -4,6 +4,7 @@ import AtriumCore
 struct AppsSettingsView: View {
     let store: AppStore
     let showAddApps: @MainActor () -> Void
+    let editWebApp: @MainActor (ManagedApp) -> Void
     @State private var selection: String?
 
     var body: some View {
@@ -62,6 +63,7 @@ struct AppsSettingsView: View {
                 Toggle("Open at Login", isOn: Binding(
                     get: { app.openAtLogin },
                     set: { value in store.update(bundleID: app.bundleIdentifier) { $0.openAtLogin = value } }))
+                if app.isWebApp { Button("Edit…") { editWebApp(app) } }
                 Divider()
                 Button("Remove from Sidebar", role: .destructive) { store.remove(bundleID: app.bundleIdentifier) }
             } label: {

@@ -266,12 +266,13 @@ final class WebAppManager {
     }
 
     private func scheduleIconRefresh(slot: String, site: URL) {
-        guard !iconRefreshScheduled.contains(slot), !browserIcons.contains(slot) else { return }
+        guard !iconRefreshScheduled.contains(slot), !browserIcons.contains(slot),
+              store.apps.first(where: { $0.bundleIdentifier == slot })?.customIcon != true else { return }
         iconRefreshScheduled.insert(slot)
         Task {
             for delay in [6, 30] {
                 try? await Task.sleep(for: .seconds(delay))
-                guard let app = store.apps.first(where: { $0.bundleIdentifier == slot }) else { return }
+                guard let app = store.apps.first(where: { $0.bundleIdentifier == slot }), !app.customIcon else { return }
                 if let path = await SiteIconFetcher.iconFromBrowser(for: site, name: app.displayName, id: slot) {
                     if let old = app.iconFile { try? FileManager.default.removeItem(atPath: old) }
                     store.update(bundleID: slot) { $0.iconFile = path }

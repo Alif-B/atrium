@@ -21,6 +21,21 @@ enum SiteIconFetcher {
         return png.flatMap { write($0, id: id) }
     }
 
+    /// A picture the user chose, drawn into the same macOS icon shape. An opaque picture fills the shape (cropped to a
+    /// square); one with transparent corners (a logo) sits on a light tile instead.
+    static func makeIcon(from image: NSImage, name: String, id: String) async -> String? {
+        let fullBleed = hasOpaqueCorners(image)
+        let png = await MainActor.run { render((image, fullBleed), name: name) }
+        return png.flatMap { write($0, id: id) }
+    }
+
+    private static func hasOpaqueCorners(_ image: NSImage) -> Bool {
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return false }
+        let rep = NSBitmapImageRep(cgImage: cg)
+        let w = rep.pixelsWide - 1, h = rep.pixelsHigh - 1
+        return [(0, 0), (w, 0), (0, h), (w, h)].allSatisfy { (rep.colorAt(x: $0.0, y: $0.1)?.alphaComponent ?? 0) > 0.95 }
+    }
+
     /// Only Edge's stored favicon; nil if Edge hasn't recorded one for this site yet.
     static func iconFromBrowser(for site: URL, name: String, id: String) async -> String? {
         guard let stored = BrowserFavicons.edgeIcon(for: site), var image = NSImage(data: stored.data), image.isValid else { return nil }
@@ -138,12 +153,16 @@ enum SiteIconFetcher {
         shape.addClip()
         if let (image, fullBleed) = source {
             if fullBleed {
-                image.draw(in: body, from: .zero, operation: .sourceOver, fraction: 1)
+                let side = min(image.size.width, image.size.height)
+                let crop = NSRect(x: (image.size.width - side) / 2, y: (image.size.height - side) / 2, width: side, height: side)
+                image.draw(in: body, from: crop, operation: .sourceOver, fraction: 1)
             } else {
                 // Small favicon: centred on a white tile with a whisper of gradient.
                 NSGradient(starting: .white, ending: NSColor(white: 0.94, alpha: 1))?.draw(in: shape, angle: -90)
-                let side = body.width * 0.56
-                image.draw(in: CGRect(x: body.midX - side / 2, y: body.midY - side / 2, width: side, height: side),
+                let box = body.width * 0.56
+                let scale = box / max(image.size.width, image.size.height, 1)
+                let w = image.size.width * scale, h = image.size.height * scale
+                image.draw(in: CGRect(x: body.midX - w / 2, y: body.midY - h / 2, width: w, height: h),
                            from: .zero, operation: .sourceOver, fraction: 1)
             }
         } else {

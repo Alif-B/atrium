@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import AtriumCore
 
 /// Remembers the selected pane. Subclassing is required: an NSTabViewController must stay its tab view's delegate
 /// (replacing that delegate throws, which is why the gear button used to do nothing).
@@ -16,7 +17,8 @@ private final class SettingsTabController: NSTabViewController {
 final class SettingsWindowController: NSWindowController {
     private let tabController: SettingsTabController
 
-    init(store: AppStore, prefs: Preferences, showAddApps: @escaping @MainActor () -> Void) {
+    init(store: AppStore, prefs: Preferences, showAddApps: @escaping @MainActor () -> Void,
+         editWebApp: @escaping @MainActor (ManagedApp) -> Void) {
         let tabController = SettingsTabController()
         tabController.tabStyle = .toolbar
         tabController.canPropagateSelectedChildViewControllerTitle = true
@@ -32,7 +34,7 @@ final class SettingsWindowController: NSWindowController {
             tabController.addTabViewItem(item)
         }
         pane("General", "gearshape", GeneralSettingsView(store: store, prefs: prefs))
-        pane("Apps", "square.grid.2x2", AppsSettingsView(store: store, showAddApps: showAddApps))
+        pane("Apps", "square.grid.2x2", AppsSettingsView(store: store, showAddApps: showAddApps, editWebApp: editWebApp))
 
         let window = NSWindow(contentViewController: tabController)
         window.styleMask = [.titled, .closable]            // no minimize or zoom, per the HIG for Settings windows

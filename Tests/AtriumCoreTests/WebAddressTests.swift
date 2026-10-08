@@ -23,3 +23,10 @@ import Testing
     let old = try JSONDecoder().decode(ManagedApp.self, from: Data(#"{"bundleIdentifier":"a","displayName":"A","lastKnownPath":"/a"}"#.utf8))
     #expect(!old.isWebApp)
 }
+
+@Test func customIconFlagRoundTripsAndDefaultsToFalse() throws {
+    let app = ManagedApp(bundleIdentifier: "atrium.web.y", displayName: "Y", lastKnownPath: "", webURL: "https://y.example.com", customIcon: true)
+    #expect(try JSONDecoder().decode(ManagedApp.self, from: JSONEncoder().encode(app)).customIcon)
+    let old = try JSONDecoder().decode(ManagedApp.self, from: Data(#"{"bundleIdentifier":"a","displayName":"A","lastKnownPath":"/a","webURL":"https://a.com"}"#.utf8))
+    #expect(!old.customIcon)
+}

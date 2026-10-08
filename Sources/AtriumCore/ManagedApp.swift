@@ -11,6 +11,8 @@ public struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
     public var webURL: String?
     public var browserBundleID: String?
     public var iconFile: String?
+    /// True when the user chose the icon themselves; it is never replaced by the site's.
+    public var customIcon: Bool
 
     public var isWebApp: Bool { webURL != nil }
     public static let webAppIDPrefix = "atrium.web."
@@ -18,7 +20,7 @@ public struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
     public init(
         id: UUID = UUID(), bundleIdentifier: String, displayName: String, lastKnownPath: String,
         snapWindow: Bool = true, openAtLogin: Bool = false,
-        webURL: String? = nil, browserBundleID: String? = nil, iconFile: String? = nil
+        webURL: String? = nil, browserBundleID: String? = nil, iconFile: String? = nil, customIcon: Bool = false
     ) {
         self.id = id
         self.bundleIdentifier = bundleIdentifier
@@ -29,6 +31,7 @@ public struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
         self.webURL = webURL
         self.browserBundleID = browserBundleID
         self.iconFile = iconFile
+        self.customIcon = customIcon
     }
 
     // Synthesized Codable ignores property defaults, so older JSON files need decodeIfPresent.
@@ -43,6 +46,7 @@ public struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
         webURL = try c.decodeIfPresent(String.self, forKey: .webURL)
         browserBundleID = try c.decodeIfPresent(String.self, forKey: .browserBundleID)
         iconFile = try c.decodeIfPresent(String.self, forKey: .iconFile)
+        customIcon = try c.decodeIfPresent(Bool.self, forKey: .customIcon) ?? false
     }
 }
 
