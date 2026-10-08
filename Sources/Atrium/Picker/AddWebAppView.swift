@@ -15,6 +15,7 @@ struct AddWebAppView: View {
     @State private var customImage: NSImage?
     @State private var scale = SiteIconFetcher.defaultScale
     @State private var preview: NSImage?
+    @State private var pasteNote: String?
     @FocusState private var addressFocused: Bool
 
     private var url: URL? { WebAddress.normalize(address) }
@@ -56,6 +57,7 @@ struct AddWebAppView: View {
 
             HStack(spacing: 8) {
                 Button("Choose Icon…") { chooseIcon() }
+                Button("Paste Image") { pasteIcon() }
                 if customImage != nil { Button("Use the Site's Icon") { customImage = nil; preview = nil } }
                 Spacer()
             }
@@ -65,8 +67,8 @@ struct AddWebAppView: View {
                     .frame(maxWidth: .infinity)
                     .onChange(of: scale) { updatePreview() }
             } else {
-                Text("The icon is taken from the website unless you choose one.")
-                    .font(.footnote).foregroundStyle(.secondary)
+                Text(pasteNote ?? "The icon is taken from the website unless you choose or paste one.")
+                    .font(.footnote).foregroundStyle(pasteNote == nil ? Color.secondary : Color(nsColor: .systemOrange))
             }
 
             Text("Links that open a new tab go to your regular Edge window. You stay signed in with your Edge profile.")
@@ -100,6 +102,7 @@ struct AddWebAppView: View {
         .padding(24)
         .frame(width: 460)
         .onAppear { addressFocused = true }
+        .onPasteCommand(of: [.image, .fileURL]) { _ in if let image = IconChooser.imageFromPasteboard() { use(image) } }
         .onChange(of: address) {
             error = nil
             if !nameEdited, let url { name = WebAddress.suggestedName(for: url) }
@@ -115,6 +118,19 @@ struct AddWebAppView: View {
 
     private func chooseIcon() {
         guard let image = IconChooser.chooseImage() else { return }
+        use(image)
+    }
+
+    private func pasteIcon() {
+        guard let image = IconChooser.imageFromPasteboard() else {
+            pasteNote = "There's no image on the clipboard. Copy a picture first."
+            return
+        }
+        use(image)
+    }
+
+    private func use(_ image: NSImage) {
+        pasteNote = nil
         customImage = image
         scale = SiteIconFetcher.defaultScale
         updatePreview()

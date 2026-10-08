@@ -15,6 +15,7 @@ struct EditWebAppView: View {
     @State private var preview: NSImage?
     @State private var siteIconPath: String?        // a freshly fetched site icon, not saved yet
     @State private var working = false
+    @State private var pasteNote: String?
     private let original: ManagedApp
 
     init(store: AppStore, app: ManagedApp, onDone: @escaping @MainActor () -> Void) {
@@ -42,10 +43,15 @@ struct EditWebAppView: View {
                     currentIcon
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    Button("Choose Icon…") { chooseIcon() }
+                    HStack(spacing: 8) {
+                        Button("Choose Icon…") { chooseIcon() }
+                        Button("Paste Image") { pasteIcon() }
+                    }
                     Button("Use the Site's Icon") { useSiteIcon() }
                         .disabled(sourceImage == nil && siteIconPath == nil && !original.customIcon)
-                    Text(statusLine).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(pasteNote ?? statusLine).font(.footnote)
+                        .foregroundStyle(pasteNote == nil ? Color.secondary : Color(nsColor: .systemOrange))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
             }
@@ -74,6 +80,7 @@ struct EditWebAppView: View {
         }
         .padding(24)
         .frame(width: 460)
+        .onPasteCommand(of: [.image, .fileURL]) { _ in if let image = IconChooser.imageFromPasteboard() { use(image) } }
     }
 
     private var statusLine: String {
@@ -91,6 +98,19 @@ struct EditWebAppView: View {
 
     private func chooseIcon() {
         guard let image = IconChooser.chooseImage() else { return }
+        use(image)
+    }
+
+    private func pasteIcon() {
+        guard let image = IconChooser.imageFromPasteboard() else {
+            pasteNote = "There's no image on the clipboard. Copy a picture first."
+            return
+        }
+        use(image)
+    }
+
+    private func use(_ image: NSImage) {
+        pasteNote = nil
         discardFetchedSiteIcon()
         sourceImage = image
         sourceChanged = true
