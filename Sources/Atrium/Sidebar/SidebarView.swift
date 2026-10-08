@@ -1,11 +1,6 @@
 import SwiftUI
 import AtriumCore
 
-enum RailGlass {
-    case swiftUI    // .glassEffect on the rail (variants a and b)
-    case appKit     // NSGlassEffectView supplies the glass (variant c)
-}
-
 struct SidebarActions {
     var switchTo: @MainActor (ManagedApp) -> Void
     var showAddApps: @MainActor () -> Void
@@ -43,7 +38,6 @@ struct SidebarView: View {
     let store: AppStore
     let prefs: Preferences
     let hover: HoverState
-    let railGlass: RailGlass
     let actions: SidebarActions
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -53,7 +47,8 @@ struct SidebarView: View {
     @State private var lensIndex: Int?
     @State private var lensVisible = false
 
-    private var outerInset: CGFloat { railGlass == .swiftUI ? DesignTokens.gap : 0 }
+    /// The panel's content view is exactly the glass rail (NSGlassEffectView supplies the glass), so there is no outer inset.
+    private let outerInset: CGFloat = 0
 
     var body: some View {
         GeometryReader { geo in
@@ -71,7 +66,6 @@ struct SidebarView: View {
 
     // MARK: Rail
 
-    @ViewBuilder
     private func rail(metrics: SidebarMetrics) -> some View {
         let content = VStack(spacing: 0) {
             itemsStack(metrics: metrics)
@@ -90,20 +84,13 @@ struct SidebarView: View {
             Button("Settings…") { actions.showSettings() }
         }
 
-        switch railGlass {
-        case .swiftUI:
-            content
-                .glassEffect(.regular, in: .rect(cornerRadius: DesignTokens.sidebarCornerRadius, style: .continuous))
-                .overlay {
-                    if contrast == .increased {
-                        RoundedRectangle(cornerRadius: DesignTokens.sidebarCornerRadius, style: .continuous)
-                            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
-                    }
+        content
+            .overlay {
+                if contrast == .increased {
+                    RoundedRectangle(cornerRadius: DesignTokens.sidebarCornerRadius, style: .continuous)
+                        .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
                 }
-                .padding(DesignTokens.gap)
-        case .appKit:
-            content
-        }
+            }
     }
 
     private func itemsStack(metrics: SidebarMetrics) -> some View {

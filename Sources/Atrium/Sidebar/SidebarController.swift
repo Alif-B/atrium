@@ -19,25 +19,17 @@ final class SidebarController {
         layout = initial
         panel = SidebarPanel(contentRect: initial.panel)
 
-        let mode: RailGlass = LaunchOptions.appKitGlass ? .appKit : .swiftUI
-        var root = AnyView(SidebarView(store: store, prefs: prefs, hover: hover, railGlass: mode, actions: actions))
-        if LaunchOptions.glassActive { root = AnyView(root.environment(\.appearsActive, true)) }
-        let host = SidebarHostingView(rootView: root)
+        let host = SidebarHostingView(rootView: SidebarView(store: store, prefs: prefs, hover: hover, actions: actions))
         host.sizingOptions = []
         host.onHover = { [hover] point in hover.point = point }
 
-        switch mode {
-        case .swiftUI:
-            panel.contentView = host
-        case .appKit:
-            let container = NSView()
-            let glass = NSGlassEffectView()
-            glass.cornerRadius = DesignTokens.sidebarCornerRadius
-            glass.contentView = host
-            container.addSubview(glass)
-            panel.contentView = container
-            glassView = glass
-        }
+        let container = NSView()
+        let glass = NSGlassEffectView()
+        glass.cornerRadius = DesignTokens.sidebarCornerRadius
+        glass.contentView = host
+        container.addSubview(glass)
+        panel.contentView = container
+        glassView = glass
 
         hover.onTargetChange = { [weak self] target in self?.updateLabel(target) }
         prefs.onLayoutChange = { [weak self] in self?.relayout() }
