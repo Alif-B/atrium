@@ -1,50 +1,60 @@
 import SwiftUI
 import AtriumCore
 
-/// Edit a web app after it was added: its name and its icon (a picture from the Mac, or back to the site's own).
+/// Edit a web app after it was added: its name and its icon (a picture from the Mac at a size you choose, or back to
+/// the site's own). Nothing is written to disk until Save, except a re-fetched site icon, which Cancel removes.
 struct EditWebAppView: View {
     let store: AppStore
     let appID: String                     // bundle identifier of the web app
     let onDone: @MainActor () -> Void
 
     @State private var name: String
-    @State private var iconFile: String?
-    @State private var customIcon: Bool
+    @State private var sourceImage: NSImage?        // the user's picture, when the icon is a custom one
+    @State private var sourceChanged = false        // a different picture than the saved one
+    @State private var scale: Double
+    @State private var preview: NSImage?
+    @State private var siteIconPath: String?        // a freshly fetched site icon, not saved yet
     @State private var working = false
-    private let originalIconFile: String?
+    private let original: ManagedApp
 
     init(store: AppStore, app: ManagedApp, onDone: @escaping @MainActor () -> Void) {
         self.store = store
         self.appID = app.bundleIdentifier
         self.onDone = onDone
+        self.original = app
         _name = State(initialValue: app.displayName)
-        _iconFile = State(initialValue: app.iconFile)
-        _customIcon = State(initialValue: app.customIcon)
-        originalIconFile = app.iconFile
+        _scale = State(initialValue: app.iconScale ?? SiteIconFetcher.defaultScale)
+        let source = app.iconSource.flatMap { NSImage(contentsOfFile: $0) }
+        _sourceImage = State(initialValue: app.customIcon ? source : nil)
     }
 
-    private var app: ManagedApp? { store.apps.first { $0.bundleIdentifier == appID } }
     private var canSave: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty && !working }
+    /// True while the icon is one the user chose (and we still have the picture, so it can be resized).
+    private var isResizable: Bool { sourceImage != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 16) {
-                preview
+            HStack(alignment: .top, spacing: 20) {
+                if isResizable {
+                    IconSizeControl(preview: preview ?? SiteIconFetcher.customPreview(sourceImage!, scale: scale), scale: $scale)
+                        .onChange(of: scale) { preview = SiteIconFetcher.customPreview(sourceImage!, scale: scale) }
+                } else {
+                    currentIcon
+                }
                 VStack(alignment: .leading, spacing: 8) {
                     Button("Choose Icon…") { chooseIcon() }
                     Button("Use the Site's Icon") { useSiteIcon() }
-                        .disabled(!customIcon && working)
-                    Text(customIcon ? "Using a picture you chose." : "Using the website's own icon.")
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .disabled(sourceImage == nil && siteIconPath == nil && !original.customIcon)
+                    Text(statusLine).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer()
+                Spacer(minLength: 0)
             }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Name").font(.callout.weight(.medium)).foregroundStyle(.secondary)
                 TextField("", text: $name).textFieldStyle(.roundedBorder).onSubmit { if canSave { save() } }
             }
-            if let site = app?.webURL {
+            if let site = original.webURL {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Website").font(.callout.weight(.medium)).foregroundStyle(.secondary)
                     Text(site).font(.callout).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
@@ -54,7 +64,7 @@ struct EditWebAppView: View {
             HStack {
                 if working { ProgressView().controlSize(.small) }
                 Spacer()
-                Button("Cancel") { discardUnsavedIcon(); onDone() }.keyboardShortcut(.cancelAction).controlSize(.large)
+                Button("Cancel") { cancel() }.keyboardShortcut(.cancelAction).controlSize(.large)
                 Button("Save") { save() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.glassProminent)
@@ -63,56 +73,81 @@ struct EditWebAppView: View {
             }
         }
         .padding(24)
-        .frame(width: 440)
+        .frame(width: 460)
     }
 
-    @ViewBuilder private var preview: some View {
-        if let iconFile, let image = IconCache.shared.image(atPath: iconFile) ?? NSImage(contentsOfFile: iconFile) {
-            Image(nsImage: image).resizable().interpolation(.high).frame(width: 88, height: 88)
-        } else if let app {
-            Image(nsImage: store.icon(for: app)).resizable().interpolation(.high).frame(width: 88, height: 88)
+    private var statusLine: String {
+        if isResizable { return "Using your picture. Drag the slider to change how big it looks." }
+        if original.customIcon && sourceImage == nil && siteIconPath == nil { return "Using a picture you chose earlier. Choose it again to change its size." }
+        return "Using the website's own icon."
+    }
+
+    @ViewBuilder private var currentIcon: some View {
+        let image: NSImage? = siteIconPath.flatMap { NSImage(contentsOfFile: $0) } ?? store.apps.first { $0.bundleIdentifier == appID }.map { store.icon(for: $0) }
+        if let image {
+            Image(nsImage: image).resizable().interpolation(.high).frame(width: 96, height: 96)
         }
     }
 
     private func chooseIcon() {
         guard let image = IconChooser.chooseImage() else { return }
-        let label = name.trimmingCharacters(in: .whitespaces)
-        working = true
-        Task {
-            let new = await SiteIconFetcher.makeIcon(from: image, name: label.isEmpty ? "?" : label, id: "custom-" + UUID().uuidString)
-            discardUnsavedIcon()
-            if let new { iconFile = new; customIcon = true }
-            working = false
-        }
+        discardFetchedSiteIcon()
+        sourceImage = image
+        sourceChanged = true
+        scale = SiteIconFetcher.defaultScale
+        preview = SiteIconFetcher.customPreview(image, scale: scale)
     }
 
     private func useSiteIcon() {
-        guard let app, let site = app.webURL.flatMap(URL.init(string:)) else { return }
+        guard let site = original.webURL.flatMap(URL.init(string:)) else { return }
         working = true
         Task {
-            let new = await SiteIconFetcher.makeIcon(for: site, name: name, id: appID)
-            discardUnsavedIcon()
-            iconFile = new
-            customIcon = false
+            let path = await SiteIconFetcher.makeIcon(for: site, name: name, id: appID)
+            discardFetchedSiteIcon()
+            siteIconPath = path
+            sourceImage = nil
+            sourceChanged = false
+            preview = nil
             working = false
         }
     }
 
-    /// Icons made during this edit that were never saved are deleted, so cancelling leaves nothing behind.
-    private func discardUnsavedIcon() {
-        if let iconFile, iconFile != originalIconFile { try? FileManager.default.removeItem(atPath: iconFile) }
+    private func discardFetchedSiteIcon() {
+        if let siteIconPath { try? FileManager.default.removeItem(atPath: siteIconPath) }
+        siteIconPath = nil
+    }
+
+    private func cancel() {
+        discardFetchedSiteIcon()
+        onDone()
     }
 
     private func save() {
         let newName = name.trimmingCharacters(in: .whitespaces)
-        let newIcon = iconFile
-        let isCustom = customIcon
+        var icon = original.iconFile, source = original.iconSource, savedScale = original.iconScale, isCustom = original.customIcon
+
+        if let image = sourceImage {
+            // A custom picture: re-render at the chosen size (reusing the stored original unless a new one was chosen).
+            if let saved = SiteIconFetcher.saveCustom(source: image, scale: scale, id: appID,
+                                                      existingSource: sourceChanged ? nil : original.iconSource) {
+                icon = saved.icon; source = saved.source; savedScale = scale; isCustom = true
+            }
+        } else if let siteIconPath {
+            icon = siteIconPath; source = nil; savedScale = nil; isCustom = false
+            self.siteIconPath = nil                        // now owned by the app
+        }
+
+        let finalIcon = icon, finalSource = source, finalScale = savedScale, finalCustom = isCustom
         store.update(bundleID: appID) {
             $0.displayName = newName
-            $0.iconFile = newIcon
-            $0.customIcon = isCustom
+            $0.iconFile = finalIcon
+            $0.iconSource = finalSource
+            $0.iconScale = finalScale
+            $0.customIcon = finalCustom
         }
-        if let originalIconFile, originalIconFile != newIcon { try? FileManager.default.removeItem(atPath: originalIconFile) }
+        // Remove files this edit replaced.
+        if let old = original.iconFile, old != finalIcon { try? FileManager.default.removeItem(atPath: old) }
+        if let old = original.iconSource, old != finalSource { try? FileManager.default.removeItem(atPath: old) }
         onDone()
     }
 }

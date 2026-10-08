@@ -21,12 +21,71 @@ enum SiteIconFetcher {
         return png.flatMap { write($0, id: id) }
     }
 
-    /// A picture the user chose, drawn into the same macOS icon shape. An opaque picture fills the shape (cropped to a
-    /// square); one with transparent corners (a logo) sits on a light tile instead.
-    static func makeIcon(from image: NSImage, name: String, id: String) async -> String? {
-        let fullBleed = hasOpaqueCorners(image)
-        let png = await MainActor.run { render((image, fullBleed), name: name) }
-        return png.flatMap { write($0, id: id) }
+    // MARK: The user's own pictures
+
+    /// Sizes the user can pick: how much of the icon's space the picture takes up.
+    static let scaleRange: ClosedRange<Double> = 0.4...1.0
+    static let defaultScale = 0.8
+
+    /// The picture, centred and fitted into `scale` of the 512 px space, on a TRANSPARENT background: no tile, no
+    /// shadow. A picture with solid corners (a photo) keeps its own background, with rounded corners.
+    @MainActor
+    static func renderCustom(_ image: NSImage, scale: Double) -> Data? {
+        let px = 512
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px, bitsPerSample: 8,
+                                         samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0, bitsPerPixel: 0),
+              let ctx = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        rep.size = NSSize(width: px, height: px)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = ctx
+        ctx.imageInterpolation = .high
+        defer { NSGraphicsContext.restoreGraphicsState() }
+
+        let box = CGFloat(px) * CGFloat(min(max(scale, scaleRange.lowerBound), scaleRange.upperBound))
+        let fit = box / max(image.size.width, image.size.height, 1)
+        let w = image.size.width * fit, h = image.size.height * fit
+        let rect = CGRect(x: (CGFloat(px) - w) / 2, y: (CGFloat(px) - h) / 2, width: w, height: h)
+        NSGraphicsContext.saveGraphicsState()
+        if hasOpaqueCorners(image) {
+            let r = min(w, h) * 0.223
+            NSBezierPath(roundedRect: rect, xRadius: r, yRadius: r).addClip()
+        }
+        image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.representation(using: .png, properties: [:])
+    }
+
+    /// A preview for the sheet.
+    @MainActor
+    static func customPreview(_ image: NSImage, scale: Double) -> NSImage? {
+        renderCustom(image, scale: scale).flatMap { NSImage(data: $0) }
+    }
+
+    /// Writes the rendered icon and a normalised copy of the original (so the size can be changed later without blur).
+    @MainActor
+    static func saveCustom(source: NSImage, scale: Double, id: String, existingSource: String? = nil) -> (icon: String, source: String)? {
+        guard let icon = renderCustom(source, scale: scale), let iconPath = write(icon, id: id) else { return nil }
+        if let existingSource, FileManager.default.fileExists(atPath: existingSource) { return (iconPath, existingSource) }
+        guard let sourcePath = write(normalizedPNG(source), id: id + "-source") else { return nil }
+        return (iconPath, sourcePath)
+    }
+
+    /// The original, at most 1024 px on its long side, keeping transparency.
+    @MainActor
+    private static func normalizedPNG(_ image: NSImage) -> Data {
+        let longest = max(image.size.width, image.size.height, 1)
+        let f = min(1, 1024 / longest)
+        let w = max(1, Int(image.size.width * f)), h = max(1, Int(image.size.height * f))
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h, bitsPerSample: 8, samplesPerPixel: 4,
+                                         hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let ctx = NSGraphicsContext(bitmapImageRep: rep) else { return Data() }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = ctx
+        ctx.imageInterpolation = .high
+        image.draw(in: CGRect(x: 0, y: 0, width: w, height: h), from: .zero, operation: .sourceOver, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.representation(using: .png, properties: [:]) ?? Data()
     }
 
     private static func hasOpaqueCorners(_ image: NSImage) -> Bool {

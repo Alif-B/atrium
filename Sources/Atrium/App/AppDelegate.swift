@@ -22,12 +22,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let spec = LaunchOptions.debugIcon {
-            let parts = spec.split(separator: ":", maxSplits: 1).map(String.init)
+            let parts = spec.split(separator: ":").map(String.init)      // input:output[:scale]
+            let scale = parts.count > 2 ? Double(parts[2]) ?? SiteIconFetcher.defaultScale : SiteIconFetcher.defaultScale
             Task { @MainActor in
-                if parts.count == 2, let image = NSImage(contentsOfFile: parts[0]),
-                   let path = await SiteIconFetcher.makeIcon(from: image, name: "Test", id: "debug-icon") {
-                    try? FileManager.default.copyItem(atPath: path, toPath: parts[1])
-                    try? FileManager.default.removeItem(atPath: path)
+                if parts.count >= 2, let image = NSImage(contentsOfFile: parts[0]),
+                   let saved = SiteIconFetcher.saveCustom(source: image, scale: scale, id: "debug-icon") {
+                    try? FileManager.default.copyItem(atPath: saved.icon, toPath: parts[1])
+                    try? FileManager.default.removeItem(atPath: saved.icon)
+                    try? FileManager.default.removeItem(atPath: saved.source)
                 }
                 NSApp.terminate(nil)
             }

@@ -30,3 +30,11 @@ import Testing
     let old = try JSONDecoder().decode(ManagedApp.self, from: Data(#"{"bundleIdentifier":"a","displayName":"A","lastKnownPath":"/a","webURL":"https://a.com"}"#.utf8))
     #expect(!old.customIcon)
 }
+
+@Test func customIconSourceAndScaleRoundTrip() throws {
+    let app = ManagedApp(bundleIdentifier: "atrium.web.z", displayName: "Z", lastKnownPath: "", webURL: "https://z.example.com",
+                         customIcon: true, iconSource: "/tmp/src.png", iconScale: 0.65)
+    let back = try JSONDecoder().decode(ManagedApp.self, from: JSONEncoder().encode(app))
+    #expect(back.iconSource == "/tmp/src.png")
+    #expect(back.iconScale == 0.65)
+}

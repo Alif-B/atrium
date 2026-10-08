@@ -13,6 +13,9 @@ public struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
     public var iconFile: String?
     /// True when the user chose the icon themselves; it is never replaced by the site's.
     public var customIcon: Bool
+    /// The picture the user chose (kept so its size can be changed later) and how large it sits in its space (0.4–1.0).
+    public var iconSource: String?
+    public var iconScale: Double?
 
     public var isWebApp: Bool { webURL != nil }
     public static let webAppIDPrefix = "atrium.web."
@@ -20,7 +23,8 @@ public struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
     public init(
         id: UUID = UUID(), bundleIdentifier: String, displayName: String, lastKnownPath: String,
         snapWindow: Bool = true, openAtLogin: Bool = false,
-        webURL: String? = nil, browserBundleID: String? = nil, iconFile: String? = nil, customIcon: Bool = false
+        webURL: String? = nil, browserBundleID: String? = nil, iconFile: String? = nil, customIcon: Bool = false,
+        iconSource: String? = nil, iconScale: Double? = nil
     ) {
         self.id = id
         self.bundleIdentifier = bundleIdentifier
@@ -32,6 +36,8 @@ public struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
         self.browserBundleID = browserBundleID
         self.iconFile = iconFile
         self.customIcon = customIcon
+        self.iconSource = iconSource
+        self.iconScale = iconScale
     }
 
     // Synthesized Codable ignores property defaults, so older JSON files need decodeIfPresent.
@@ -47,6 +53,8 @@ public struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
         browserBundleID = try c.decodeIfPresent(String.self, forKey: .browserBundleID)
         iconFile = try c.decodeIfPresent(String.self, forKey: .iconFile)
         customIcon = try c.decodeIfPresent(Bool.self, forKey: .customIcon) ?? false
+        iconSource = try c.decodeIfPresent(String.self, forKey: .iconSource)
+        iconScale = try c.decodeIfPresent(Double.self, forKey: .iconScale)
     }
 }
 

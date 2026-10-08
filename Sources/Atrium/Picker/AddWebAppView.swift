@@ -11,8 +11,10 @@ struct AddWebAppView: View {
     @State private var nameEdited = false
     @State private var working = false
     @State private var error: String?
-    /// A picture the user chose (already rendered to an icon file); nil = fetch the site's own icon.
-    @State private var customIconPath: String?
+    /// A picture the user chose; nil = fetch the site's own icon. `scale` is how big it sits in its space.
+    @State private var customImage: NSImage?
+    @State private var scale = SiteIconFetcher.defaultScale
+    @State private var preview: NSImage?
     @FocusState private var addressFocused: Bool
 
     private var url: URL? { WebAddress.normalize(address) }
@@ -21,8 +23,8 @@ struct AddWebAppView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
-                if let customIconPath, let image = NSImage(contentsOfFile: customIconPath) {
-                    Image(nsImage: image).resizable().interpolation(.high).frame(width: 52, height: 52)
+                if customImage != nil {
+                    Image(systemName: "globe").hidden().frame(width: 0)      // keeps the header's spacing steady
                 } else {
                     Image(systemName: "globe")
                         .font(.system(size: 22, weight: .medium))
@@ -54,12 +56,18 @@ struct AddWebAppView: View {
 
             HStack(spacing: 8) {
                 Button("Choose Icon…") { chooseIcon() }
-                if customIconPath != nil { Button("Use the Site's Icon") { customIconPath = nil } }
+                if customImage != nil { Button("Use the Site's Icon") { customImage = nil; preview = nil } }
                 Spacer()
             }
             .disabled(working)
-            Text(customIconPath == nil ? "The icon is taken from the website unless you choose one." : "Using the picture you chose.")
-                .font(.footnote).foregroundStyle(.secondary)
+            if customImage != nil {
+                IconSizeControl(preview: preview, scale: $scale)
+                    .frame(maxWidth: .infinity)
+                    .onChange(of: scale) { updatePreview() }
+            } else {
+                Text("The icon is taken from the website unless you choose one.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
 
             Text("Links that open a new tab go to your regular Edge window. You stay signed in with your Edge profile.")
                 .font(.footnote).foregroundStyle(.secondary)
@@ -76,7 +84,7 @@ struct AddWebAppView: View {
             HStack {
                 if working {
                     ProgressView().controlSize(.small)
-                    Text(customIconPath == nil ? "Getting the site's icon…" : "Preparing the icon…").font(.callout).foregroundStyle(.secondary)
+                    Text(customImage == nil ? "Getting the site's icon…" : "Preparing the icon…").font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Cancel") { onDone() }
@@ -107,12 +115,13 @@ struct AddWebAppView: View {
 
     private func chooseIcon() {
         guard let image = IconChooser.chooseImage() else { return }
-        let label = name.trimmingCharacters(in: .whitespaces)
-        working = true
-        Task {
-            customIconPath = await SiteIconFetcher.makeIcon(from: image, name: label.isEmpty ? "?" : label, id: "custom-" + UUID().uuidString)
-            working = false
-        }
+        customImage = image
+        scale = SiteIconFetcher.defaultScale
+        updatePreview()
+    }
+
+    private func updatePreview() {
+        preview = customImage.flatMap { SiteIconFetcher.customPreview($0, scale: scale) }
     }
 
     private func add() {
@@ -121,11 +130,16 @@ struct AddWebAppView: View {
         let id = ManagedApp.webAppIDPrefix + UUID().uuidString
         working = true
         Task {
-            let icon: String?
-            if let customIconPath { icon = customIconPath } else { icon = await SiteIconFetcher.makeIcon(for: url, name: displayName, id: id) }
+            var icon: String?, source: String?
+            if let customImage, let saved = SiteIconFetcher.saveCustom(source: customImage, scale: scale, id: id) {
+                icon = saved.icon
+                source = saved.source
+            } else {
+                icon = await SiteIconFetcher.makeIcon(for: url, name: displayName, id: id)
+            }
             store.add(ManagedApp(bundleIdentifier: id, displayName: displayName, lastKnownPath: "",
                                  webURL: url.absoluteString, browserBundleID: WebAppManager.edgeBundleID, iconFile: icon,
-                                 customIcon: customIconPath != nil))
+                                 customIcon: source != nil, iconSource: source, iconScale: source != nil ? scale : nil))
             working = false
             onDone()
         }

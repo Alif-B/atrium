@@ -9,7 +9,7 @@ enum LaunchOptions {
     static let debugFollow: String? = CommandLine.arguments.first { $0.hasPrefix("--debug-follow=") }.map { String($0.dropFirst(15)) }
     /// With `--debug-follow`: instead of moving the window, simulate a click that brings Atrium in front of the app.
     static let debugOrder = CommandLine.arguments.contains("--debug-order")
-    /// `--debug-icon=<input image>:<output png>`: render a picture through the web-app icon pipeline, then quit.
+    /// `--debug-icon=<input image>:<output png>[:scale]`: render a picture through the web-app icon pipeline, then quit.
     static let debugIcon: String? = CommandLine.arguments.first { $0.hasPrefix("--debug-icon=") }.map { String($0.dropFirst(13)) }
     /// Opens the Settings window at launch (used to verify it opens).
     static let debugSettings = CommandLine.arguments.contains("--debug-settings")
