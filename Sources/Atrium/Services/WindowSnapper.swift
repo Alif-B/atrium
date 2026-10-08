@@ -14,6 +14,8 @@ final class WindowSnapper {
     private var task: Task<Void, Never>?
     private var followTask: Task<Void, Never>?
     private var lastFollow = Date.distantPast
+    /// Called after a window was fitted, so Atrium can slot itself under it.
+    var onSnapped: (@MainActor () -> Void)?
 
     init(store: AppStore, workspaceRect: @escaping @MainActor () -> CGRect) {
         self.store = store
@@ -53,6 +55,7 @@ final class WindowSnapper {
         snapped[pid] = window
         log.notice("snap complete for pid \(pid)")
         AX.raise(window)
+        onSnapped?()
 
         // Electron apps restore their saved bounds shortly after showing a window: re-check twice.
         for delay in [300, 700] {
@@ -89,6 +92,20 @@ final class WindowSnapper {
             guard !Task.isCancelled else { return }
             apply(window, app: app)
         }
+    }
+
+    /// The window-server number of the app's largest normal on-screen window (public CGWindowList API; no permission needed).
+    func windowNumber(pid: pid_t) -> Int? {
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        var best: (number: Int, area: Double)?
+        for w in list {
+            guard (w[kCGWindowOwnerPID as String] as? Int32) == pid, (w[kCGWindowLayer as String] as? Int) == 0,
+                  let number = w[kCGWindowNumber as String] as? Int,
+                  let b = w[kCGWindowBounds as String] as? [String: Double] else { continue }
+            let area = (b["Width"] ?? 0) * (b["Height"] ?? 0)
+            if area > (best?.area ?? 0) { best = (number, area) }
+        }
+        return best?.number
     }
 
     /// Brings Atrium's window forward and then lifts the snapped app's window above it (they overlap in the workspace).

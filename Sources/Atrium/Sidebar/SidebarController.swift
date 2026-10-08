@@ -20,6 +20,8 @@ final class SidebarController {
 
     /// Called after the window moved, resized or changed display (debounced by AppKit's live-resize end).
     var onFrameChange: (@MainActor () -> Void)?
+    /// Atrium's window became key (a click on it); it may have been raised above the snapped app.
+    var onBecameKey: (@MainActor () -> Void)?
 
     init(store: AppStore, prefs: Preferences, actions: SidebarActions) {
         self.prefs = prefs
@@ -48,6 +50,9 @@ final class SidebarController {
                 MainActor.assumeIsolated { self?.frameChanged() }
             })
         }
+        observers.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.onBecameKey?() }
+        })
         observers.append(center.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.onFrameChange?() }
         })

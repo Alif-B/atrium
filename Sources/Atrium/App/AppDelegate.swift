@@ -44,23 +44,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onManagedActivated: { [weak self] id in self?.managedAppActivated(id) },
                 onTerminated: { [weak self] pid in self?.snapper?.appTerminated(pid: pid) })
             sidebar.onFrameChange = { [weak self] in self?.snapper?.follow() }
+            sidebar.onBecameKey = { [weak self] in self?.keepWorkspaceVisible() }
+            snapper.onSnapped = { [weak self] in self?.keepWorkspaceVisible() }
             if let id = LaunchOptions.debugFollow { runFollowDiagnostic(bundleID: id) }
         }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
-    /// Atrium's window overlaps the snapped app's area, so activating Atrium (e.g. clicking the rail) would cover that app.
-    /// Lift the snapped app back above it, unless one of Atrium's own secondary windows is what the user is using.
-    func applicationDidBecomeActive(_ notification: Notification) {
-        guard snapper != nil, let id = store.activeBundleID, let running = Launcher.runningApp(bundleID: id),
-              snapper?.snappedPIDs.contains(running.processIdentifier) == true else { return }
-        let secondaryVisible = [addAppsWindow?.window, settingsWindow?.window].contains { $0?.isVisible == true }
-        guard !secondaryVisible else { return }
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(60))
-            self.snapper?.raiseSnapped(pid: running.processIdentifier)
-        }
+    /// Atrium's window and the snapped app's window overlap. Whenever Atrium is brought forward (a click, a drag, the Dock),
+    /// put it back directly *under* the snapped app's window, so the app stays visible inside Atrium ("sticky").
+    func applicationDidBecomeActive(_ notification: Notification) { keepWorkspaceVisible() }
+
+    func keepWorkspaceVisible() {
+        guard snapper != nil, let id = store.activeBundleID, let pid = Launcher.runningApp(bundleID: id)?.processIdentifier,
+              snapper?.snappedPIDs.contains(pid) == true, let number = snapper?.windowNumber(pid: pid) else { return }
+        sidebar.window.order(.below, relativeTo: number)
     }
 
     /// Dock-icon click brings the main window back (it can be closed with ⌘W without quitting).
@@ -80,6 +79,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             log.notice("diag: switching to \(bundleID, privacy: .public)")
             switcher.switchTo(app)
             try? await Task.sleep(for: .seconds(6))
+            if LaunchOptions.debugOrder {
+                log.notice("diag: ordering Atrium to FRONT (simulated click)")
+                sidebar.window.orderFrontRegardless()
+                try? await Task.sleep(for: .seconds(3))
+                log.notice("diag: keepWorkspaceVisible()")
+                keepWorkspaceVisible()
+                return
+            }
             for step in 1...10 {
                 var f = sidebar.window.frame
                 f.origin.x += 20
@@ -102,7 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if prefs.snapOnSwitch, app.snapWindow, snapper?.snappedPIDs.contains(pid) == false {
             snapper?.snap(pid: pid, launching: false)
         } else {
-            snapper?.raiseSnapped(pid: pid)
+            keepWorkspaceVisible()
         }
     }
 

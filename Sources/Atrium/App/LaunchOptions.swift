@@ -7,4 +7,6 @@ enum LaunchOptions {
 
     /// `--debug-follow=<bundle id>`: switch to that app, then move Atrium's window programmatically (see AppDelegate).
     static let debugFollow: String? = CommandLine.arguments.first { $0.hasPrefix("--debug-follow=") }.map { String($0.dropFirst(15)) }
+    /// With `--debug-follow`: instead of moving the window, simulate a click that brings Atrium in front of the app.
+    static let debugOrder = CommandLine.arguments.contains("--debug-order")
 }
