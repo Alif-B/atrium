@@ -15,6 +15,8 @@ final class SidebarController {
     private let glassView = NSGlassEffectView()
     private var observers: [NSObjectProtocol] = []
     private var screenTask: Task<Void, Never>?
+    private var watchTask: Task<Void, Never>?
+    private var lastWatchedFrame: CGRect = .zero
 
     /// Called after the window moved, resized or changed display (debounced by AppKit's live-resize end).
     var onFrameChange: (@MainActor () -> Void)?
@@ -58,6 +60,21 @@ final class SidebarController {
             }
         }
         relayout()
+        startFrameWatcher()
+    }
+
+    /// A borderless window dragged by its background doesn't reliably post move notifications, so also watch the frame:
+    /// ~60 Hz while a mouse button is down (a drag may be in progress), slowly otherwise (catches moves by other tools).
+    private func startFrameWatcher() {
+        lastWatchedFrame = window.frame
+        watchTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let dragging = NSEvent.pressedMouseButtons != 0
+                try? await Task.sleep(for: dragging ? .milliseconds(16) : .milliseconds(250))
+                guard let self else { return }
+                if self.window.frame != self.lastWatchedFrame { self.frameChanged() }
+            }
+        }
     }
 
     func show() {
@@ -75,6 +92,7 @@ final class SidebarController {
     }
 
     private func frameChanged() {
+        lastWatchedFrame = window.frame
         relayout()
         onFrameChange?()
     }
