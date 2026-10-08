@@ -22,8 +22,48 @@ final class WindowSnapper {
         self.workspaceRect = workspaceRect
     }
 
+    /// Watches each placed window: if the user moves or resizes it by hand, put it back (Atrium owns the geometry).
+    private var guards: [pid_t: AXWindowObserver] = [:]
+    private var restoreTasks: [pid_t: Task<Void, Never>] = [:]
+    /// Windows that refused the target size (e.g. an app minimum larger than Atrium's area). We stop fighting them
+    /// until the next snap or Atrium move, so we never loop forever.
+    private var unfittable: Set<pid_t> = []
+
     var snappedPIDs: Set<pid_t> { Set(snapped.keys) }
-    func appTerminated(pid: pid_t) { snapped[pid] = nil }
+
+    func appTerminated(pid: pid_t) { forget(pid) }
+
+    private func forget(_ pid: pid_t) {
+        snapped[pid] = nil
+        restoreTasks.removeValue(forKey: pid)?.cancel()
+        if let g = guards.removeValue(forKey: pid) {
+            Task { @MainActor in g.invalidate() }      // never tear down from inside its own callback
+        }
+    }
+
+    private func guardWindow(_ window: AXUIElement, pid: pid_t) {
+        if let old = guards.removeValue(forKey: pid) { old.invalidate() }
+        guards[pid] = AXWindowObserver(
+            pid: pid, element: window,
+            notifications: [kAXMovedNotification, kAXResizedNotification, kAXUIElementDestroyedNotification]
+        ) { [weak self] name in self?.windowChangedExternally(pid: pid, notification: name) }
+    }
+
+    /// Debounced: wait until the user stops dragging/resizing, then fit it back. Our own moves land here too, but
+    /// `apply` is a no-op when the window is already in place, so there is no feedback loop.
+    private func windowChangedExternally(pid: pid_t, notification: String) {
+        if notification == kAXUIElementDestroyedNotification { forget(pid); return }
+        restoreTasks[pid]?.cancel()
+        restoreTasks[pid] = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled, let self, let window = self.snapped[pid], !self.unfittable.contains(pid) else { return }
+            self.apply(window, app: AX.app(pid))
+            if let f = AX.frame(window), !self.matches(f, self.axTarget()) {
+                self.unfittable.insert(pid)
+                log.notice("pid \(pid) won't take the target frame; leaving it until the next fit")
+            }
+        }
+    }
 
     /// Target frame in AX coordinates, computed fresh every time.
     private func axTarget() -> CGRect {
@@ -51,8 +91,10 @@ final class WindowSnapper {
         guard !AX.isFullScreen(window) else { log.debug("pid \(pid) is full screen; not snapping"); return }
 
         if AX.bool(window, kAXMinimizedAttribute) == true { AX.set(window, kAXMinimizedAttribute, false as CFBoolean) }
+        unfittable.remove(pid)
         apply(window, app: app)
         snapped[pid] = window
+        guardWindow(window, pid: pid)
         log.notice("snap complete for pid \(pid)")
         AX.raise(window)
         onSnapped?()
@@ -65,32 +107,35 @@ final class WindowSnapper {
         }
     }
 
+    private func matches(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.minX - b.minX) < 1 && abs(a.minY - b.minY) < 1 && abs(a.width - b.width) < 1 && abs(a.height - b.height) < 1
+    }
+
     private func apply(_ window: AXUIElement, app: AXUIElement) {
         let target = axTarget()
-        if let current = AX.frame(window),
-           abs(current.minX - target.minX) < 1, abs(current.minY - target.minY) < 1,
-           abs(current.width - target.width) < 1, abs(current.height - target.height) < 1 { return }
+        if let current = AX.frame(window), matches(current, target) { return }
         AX.setFrame(window, app: app, to: target)
         log.notice("snapped to \(NSStringFromRect(target), privacy: .public)")
     }
 
-    /// Atrium moved or resized: carry the active app's window along (live, throttled, with a trailing final apply).
+    /// Atrium moved or resized: carry every placed window along. The visible (active) one moves live, throttled;
+    /// the hidden ones (stacked behind Atrium) catch up once the drag pauses, which keeps dragging smooth.
     func follow() {
-        guard store.isAXTrusted else { log.notice("follow: AX not trusted"); return }
-        guard let id = store.activeBundleID else { log.notice("follow: no active app"); return }
-        guard let pid = Launcher.runningApp(bundleID: id)?.processIdentifier else { log.notice("follow: \(id, privacy: .public) not running"); return }
-        guard let window = snapped[pid] else { log.notice("follow: pid \(pid) was never snapped (snapped: \(self.snapped.keys.map { String($0) }.joined(separator: ","), privacy: .public))"); return }
-        log.notice("follow: pid \(pid) target \(NSStringFromRect(self.axTarget()), privacy: .public) current \(NSStringFromRect(AX.frame(window) ?? .zero), privacy: .public)")
-        let app = AX.app(pid)
-        if Date().timeIntervalSince(lastFollow) > 0.04 {
+        guard store.isAXTrusted, !snapped.isEmpty else { return }
+        unfittable.removeAll()
+        let activePID = store.activeBundleID.flatMap { Launcher.runningApp(bundleID: $0)?.processIdentifier }
+        if let activePID, let window = snapped[activePID], Date().timeIntervalSince(lastFollow) > 0.04 {
             lastFollow = Date()
-            apply(window, app: app)
+            apply(window, app: AX.app(activePID))
         }
         followTask?.cancel()
         followTask = Task {
-            try? await Task.sleep(for: .milliseconds(90))
+            try? await Task.sleep(for: .milliseconds(120))
             guard !Task.isCancelled else { return }
-            apply(window, app: app)
+            for (pid, window) in snapped {
+                if AX.frame(window) == nil { forget(pid); continue }          // window was closed
+                apply(window, app: AX.app(pid))
+            }
         }
     }
 
