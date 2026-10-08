@@ -9,13 +9,16 @@ private let log = Logger(subsystem: "com.alif.atrium", category: "switcher")
 final class AppSwitcher {
     private let store: AppStore
     private let prefs: Preferences
+    private let snapper: WindowSnapper
+    private var promptedForAccessibility = false
     private var task: Task<Void, Never>?
     /// The app a sidebar-initiated switch is currently working on (WorkspaceMonitor uses it to avoid double handling).
     private(set) var inFlightBundleID: String?
 
-    init(store: AppStore, prefs: Preferences) {
+    init(store: AppStore, prefs: Preferences, snapper: WindowSnapper) {
         self.store = store
         self.prefs = prefs
+        self.snapper = snapper
     }
 
     func switchTo(_ app: ManagedApp) {
@@ -25,8 +28,14 @@ final class AppSwitcher {
         inFlightBundleID = id
         store.activeBundleID = id                       // the lens starts moving on this frame
         prefs.lastActiveBundleID = id
-        if Launcher.runningApp(bundleID: id) == nil { store.launchingBundleIDs.insert(id) }
-        task = Task { await run(id: id, url: url) }
+        let wasRunning = Launcher.runningApp(bundleID: id) != nil
+        if !wasRunning { store.launchingBundleIDs.insert(id) }
+        if prefs.snapOnSwitch, app.snapWindow, !store.isAXTrusted, !promptedForAccessibility {
+            promptedForAccessibility = true            // the system dialog offers to open System Settings; ask once per launch
+            _ = AX.isTrusted(prompt: true)
+        }
+        let snap = prefs.snapOnSwitch && app.snapWindow
+        task = Task { await run(id: id, url: url, wasRunning: wasRunning, snap: snap) }
     }
 
     func bringLastActiveForward() {
@@ -34,7 +43,7 @@ final class AppSwitcher {
         switchTo(app)
     }
 
-    private func run(id: String, url: URL) async {
+    private func run(id: String, url: URL, wasRunning: Bool, snap: Bool) async {
         defer { if inFlightBundleID == id { inFlightBundleID = nil } }
 
         // Atrium is the active app after a click on its window; yield so the target can take over.
@@ -49,6 +58,8 @@ final class AppSwitcher {
             store.launchingBundleIDs.remove(id)
             return
         }
+
+        if snap { snapper.snap(pid: running.processIdentifier, launching: !wasRunning) }
 
         // Fallback: activation from a background request can be ignored on macOS 14+.
         try? await Task.sleep(for: .milliseconds(250))

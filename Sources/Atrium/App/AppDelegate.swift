@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var store: AppStore!
     private var sidebar: SidebarController!
     private var switcher: AppSwitcher!
+    private var snapper: WindowSnapper?
     private var workspace: WorkspaceMonitor?
     private var permissions: PermissionMonitor?
     private var addAppsWindow: HostingWindowController?
@@ -34,15 +35,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sidebar = SidebarController(store: store, prefs: prefs, actions: actions)
         sidebar.show()
         if !LaunchOptions.demo {
-            switcher = AppSwitcher(store: store, prefs: prefs)
-            workspace = WorkspaceMonitor(store: store, prefs: prefs, switcher: switcher) { [weak self] _ in
-                self?.sidebar.show()          // a managed app came forward from elsewhere: keep Atrium's window with it
-            }
+            let snapper = WindowSnapper(store: store, workspaceRect: { [weak self] in self?.sidebar.workspaceRect ?? .zero })
+            self.snapper = snapper
+            switcher = AppSwitcher(store: store, prefs: prefs, snapper: snapper)
             permissions = PermissionMonitor(store: store)
+            workspace = WorkspaceMonitor(
+                store: store, prefs: prefs, switcher: switcher,
+                onManagedActivated: { [weak self] id in self?.managedAppActivated(id) },
+                onTerminated: { [weak self] pid in self?.snapper?.appTerminated(pid: pid) })
+            sidebar.onFrameChange = { [weak self] in self?.snapper?.follow() }
         }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    /// Atrium's window overlaps the snapped app's area, so activating Atrium (e.g. clicking the rail) would cover that app.
+    /// Lift the snapped app back above it, unless one of Atrium's own secondary windows is what the user is using.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard snapper != nil, let id = store.activeBundleID, let running = Launcher.runningApp(bundleID: id),
+              snapper?.snappedPIDs.contains(running.processIdentifier) == true else { return }
+        let secondaryVisible = [addAppsWindow?.window, settingsWindow?.window].contains { $0?.isVisible == true }
+        guard !secondaryVisible else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(60))
+            self.snapper?.raiseSnapped(pid: running.processIdentifier)
+        }
+    }
 
     /// Dock-icon click brings the main window back (it can be closed with ⌘W without quitting).
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -52,6 +70,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: Actions
+
+    /// A managed app came forward from somewhere else (⌘-Tab, Dock, its own window): snap it once, and keep Atrium's
+    /// rail visible next to it.
+    private func managedAppActivated(_ id: String) {
+        guard let app = store.apps.first(where: { $0.bundleIdentifier == id }),
+              let running = Launcher.runningApp(bundleID: id) else { return }
+        let pid = running.processIdentifier
+        sidebar.window.orderFrontRegardless()
+        if prefs.snapOnSwitch, app.snapWindow, snapper?.snappedPIDs.contains(pid) == false {
+            snapper?.snap(pid: pid, launching: false)
+        } else {
+            snapper?.raiseSnapped(pid: pid)
+        }
+    }
 
     private func handleClick(_ app: ManagedApp) {
         if store.isMissing(app) { locate(app); return }
