@@ -24,3 +24,13 @@ import Testing
     #expect(BadgeText.parse("!") == .text("!"))
     #expect(BadgeText.parse("unread") == .dot)
 }
+
+@Test func unreadCountFromPageTitles() {
+    #expect(TitleBadge.parse("Inbox (12) - me@gmail.com - Gmail") == .count(12))
+    #expect(TitleBadge.parse("(3) Messenger") == .count(3))
+    #expect(TitleBadge.parse("[2] Team chat") == .count(2))
+    #expect(TitleBadge.parse("Google Calendar - October 2026") == nil)
+    #expect(TitleBadge.parse("Report (2024) final") == nil)         // a year
+    #expect(TitleBadge.parse("Plain title") == nil)
+    #expect(TitleBadge.parse("Inbox (0)") == nil)
+}

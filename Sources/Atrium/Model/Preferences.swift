@@ -13,6 +13,9 @@ final class Preferences {
     }
     var snapOnSwitch: Bool { didSet { defaults.set(snapOnSwitch, forKey: "snapOnSwitch") } }
     var showBadges: Bool { didSet { defaults.set(showBadges, forKey: "showBadges") } }
+    /// A short sound when an app gets something new while you're not looking at it.
+    var playBadgeSound: Bool { didSet { defaults.set(playBadgeSound, forKey: "playBadgeSound") } }
+    var badgeSoundName: String { didSet { defaults.set(badgeSoundName, forKey: "badgeSoundName") } }
     var restoreLastApp: Bool { didSet { defaults.set(restoreLastApp, forKey: "restoreLastApp") } }
     var lastActiveBundleID: String? { didSet { defaults.set(lastActiveBundleID, forKey: "lastActiveBundleID") } }
     var hasCompletedOnboarding: Bool { didSet { defaults.set(hasCompletedOnboarding, forKey: "hasCompletedOnboarding") } }
@@ -22,6 +25,8 @@ final class Preferences {
         sidebarEdge = SidebarEdge(rawValue: d.string(forKey: "sidebarEdge") ?? "") ?? .left
         snapOnSwitch = d.object(forKey: "snapOnSwitch") as? Bool ?? true
         showBadges = d.object(forKey: "showBadges") as? Bool ?? true
+        playBadgeSound = d.object(forKey: "playBadgeSound") as? Bool ?? true
+        badgeSoundName = d.string(forKey: "badgeSoundName") ?? "Glass"
         restoreLastApp = d.object(forKey: "restoreLastApp") as? Bool ?? true
         lastActiveBundleID = d.string(forKey: "lastActiveBundleID")
         hasCompletedOnboarding = d.bool(forKey: "hasCompletedOnboarding")

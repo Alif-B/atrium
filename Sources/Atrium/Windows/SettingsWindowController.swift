@@ -17,7 +17,7 @@ private final class SettingsTabController: NSTabViewController {
 final class SettingsWindowController: NSWindowController {
     private let tabController: SettingsTabController
 
-    init(store: AppStore, prefs: Preferences, showAddApps: @escaping @MainActor () -> Void,
+    init(store: AppStore, prefs: Preferences, previewSound: @escaping @MainActor (String) -> Void, showAddApps: @escaping @MainActor () -> Void,
          editWebApp: @escaping @MainActor (ManagedApp) -> Void) {
         let tabController = SettingsTabController()
         tabController.tabStyle = .toolbar
@@ -33,7 +33,7 @@ final class SettingsWindowController: NSWindowController {
             item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
             tabController.addTabViewItem(item)
         }
-        pane("General", "gearshape", GeneralSettingsView(store: store, prefs: prefs))
+        pane("General", "gearshape", GeneralSettingsView(store: store, prefs: prefs, previewSound: previewSound))
         pane("Apps", "square.grid.2x2", AppsSettingsView(store: store, showAddApps: showAddApps, editWebApp: editWebApp))
 
         let window = NSWindow(contentViewController: tabController)

@@ -11,6 +11,8 @@ enum LaunchOptions {
     static let debugOrder = CommandLine.arguments.contains("--debug-order")
     /// `--debug-icon=<input image>:<output png>[:scale]`: render a picture through the web-app icon pipeline, then quit.
     static let debugIcon: String? = CommandLine.arguments.first { $0.hasPrefix("--debug-icon=") }.map { String($0.dropFirst(13)) }
+    /// With `--debug-follow`: simulate clicking Atrium's empty area while no sidebar app is current.
+    static let debugEmptyClick = CommandLine.arguments.contains("--debug-empty-click")
     /// Opens the Settings window at launch (used to verify it opens).
     static let debugSettings = CommandLine.arguments.contains("--debug-settings")
 }

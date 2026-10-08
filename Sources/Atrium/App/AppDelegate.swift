@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var snapper: WindowSnapper?
     private var workspace: WorkspaceMonitor?
     private var permissions: PermissionMonitor?
+    private var badgeMonitor: BadgeMonitor?
     private var orderCache: (slot: String, number: Int, at: Date)?
     private var webApps: WebAppManager?
     private var addAppsWindow: HostingWindowController?
@@ -69,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if slot.hasPrefix(ManagedApp.webAppIDPrefix) { self?.store.runningBundleIDs.remove(slot) }
             }
             permissions = PermissionMonitor(store: store)
+            badgeMonitor = BadgeMonitor(store: store, prefs: prefs, snapper: snapper)
             workspace = WorkspaceMonitor(
                 store: store, prefs: prefs, switcher: switcher,
                 onManagedActivated: { [weak self] id in self?.managedAppActivated(id) },
@@ -83,8 +85,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.snapper?.follow()
                 self?.keepWorkspaceVisible()          // a drag may have started with Atrium raised above the app
             }
-            sidebar.onBecameKey = { [weak self] in self?.keepWorkspaceVisible() }
-            sidebar.window.onMouseDown = { [weak self] in self?.keepWorkspaceVisible() }
+            sidebar.onBecameKey = { [weak self] in self?.keepWorkspaceVisible(restoreLast: true, fresh: true) }
+            sidebar.window.onMouseDown = { [weak self] in self?.keepWorkspaceVisible(restoreLast: true, fresh: true) }
             snapper.onSnapped = { [weak self] in self?.keepWorkspaceVisible() }
             if let id = LaunchOptions.debugFollow { runFollowDiagnostic(bundleID: id) } else { preloadAll() }
             if LaunchOptions.debugSettings { showSettings() }
@@ -95,20 +97,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Atrium's window and the snapped app's window overlap. Whenever Atrium is brought forward (a click, a drag, the Dock),
     /// put it back directly *under* the snapped app's window, so the app stays visible inside Atrium ("sticky").
-    func applicationDidBecomeActive(_ notification: Notification) { keepWorkspaceVisible() }
+    func applicationDidBecomeActive(_ notification: Notification) { keepWorkspaceVisible(restoreLast: true, fresh: true) }
 
-    func keepWorkspaceVisible() {
-        guard let snapper, let id = store.activeBundleID, snapper.isPlaced(id) else { return }
-        // CGWindowList is ~1 ms; this runs at up to 30 Hz during drags, so reuse the number for a second.
-        let number: Int
-        if let cached = orderCache, cached.slot == id, Date().timeIntervalSince(cached.at) < 1 {
-            number = cached.number
-        } else {
-            guard let fresh = snapper.windowNumber(slot: id) else { return }
-            orderCache = (id, fresh, Date())
-            number = fresh
+    /// - restoreLast: Atrium was just clicked. If no sidebar app is current (the last thing used was some other app),
+    ///   fall back to the workspace's last app instead of leaving Atrium's empty area on top of everything.
+    /// - fresh: look the window up again rather than reuse a number found in the last second.
+    func keepWorkspaceVisible(restoreLast: Bool = false, fresh: Bool = false) {
+        guard let snapper else { return }
+        var id = store.activeBundleID
+        if restoreLast, id.map({ !snapper.isPlaced($0) }) ?? true,
+           let last = prefs.lastActiveBundleID, snapper.isPlaced(last) {
+            id = last
+            store.activeBundleID = last
         }
-        sidebar.window.order(.below, relativeTo: number)
+        guard let id, snapper.isPlaced(id) else { return }
+        // CGWindowList is ~1 ms; during drags this runs at up to 60 Hz, so reuse the number for a second.
+        var number: Int?
+        if !fresh, let cached = orderCache, cached.slot == id, Date().timeIntervalSince(cached.at) < 1 { number = cached.number }
+        if number == nil, let found = snapper.windowNumber(slot: id) {
+            orderCache = (id, found, Date())
+            number = found
+        }
+        if let number {
+            sidebar.window.order(.below, relativeTo: number)
+        } else {
+            snapper.raise(slot: id)          // couldn't find its number: lift the window itself above Atrium
+        }
     }
 
     /// Dock-icon click brings the main window back (it can be closed with ⌘W without quitting).
@@ -157,6 +171,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             log.notice("diag: switching to \(bundleID, privacy: .public)")
             switcher.switchTo(app)
             try? await Task.sleep(for: .seconds(6))
+            if LaunchOptions.debugEmptyClick {
+                store.activeBundleID = nil                     // the last thing used was some other app
+                log.notice("diag: no active app; Atrium forced to FRONT")
+                sidebar.window.orderFrontRegardless()
+                try? await Task.sleep(for: .seconds(3))
+                log.notice("diag: simulated click on the empty area")
+                keepWorkspaceVisible(restoreLast: true, fresh: true)
+                return
+            }
             if LaunchOptions.debugOrder {
                 // Two rounds of "Atrium raised above the app, then moved" (what a repeated drag does).
                 for round in 1...2 {
@@ -207,7 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showSettings() {
         if settingsWindow == nil {
-            settingsWindow = SettingsWindowController(store: store, prefs: prefs, showAddApps: { [weak self] in self?.showAddApps() },
+            settingsWindow = SettingsWindowController(store: store, prefs: prefs, previewSound: { [weak self] name in self?.badgeMonitor?.preview(soundNamed: name) }, showAddApps: { [weak self] in self?.showAddApps() },
                                                       editWebApp: { [weak self] app in self?.showEditWebApp(app) })
         }
         settingsWindow?.present()

@@ -3,12 +3,24 @@ import SwiftUI
 struct GeneralSettingsView: View {
     let store: AppStore
     @Bindable var prefs: Preferences
+    let previewSound: @MainActor (String) -> Void
+    private static let sounds = ["Glass", "Tink", "Ping", "Pop", "Hero", "Funk", "Submarine", "Bottle", "Frog", "Purr"]
 
     var body: some View {
         Form {
             Section("Windows") {
                 Toggle("Place apps inside Atrium", isOn: $prefs.snapOnSwitch)
                 Toggle("Show unread badges", isOn: $prefs.showBadges)
+            }
+            Section("Notifications") {
+                Toggle("Play a sound when something new arrives", isOn: $prefs.playBadgeSound)
+                Picker("Sound", selection: $prefs.badgeSoundName) {
+                    ForEach(Self.sounds, id: \.self) { Text($0).tag($0) }
+                }
+                .disabled(!prefs.playBadgeSound)
+                .onChange(of: prefs.badgeSoundName) { _, name in previewSound(name) }
+                Text("Atrium plays this when an app's unread count goes up while you're looking at another app. Apps also keep their own notifications, controlled in System Settings ▸ Notifications.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Startup") {
                 Toggle("Reopen the last app when Atrium starts", isOn: $prefs.restoreLastApp)
@@ -36,6 +48,6 @@ struct GeneralSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 360)
+        .frame(width: 520, height: 500)
     }
 }
