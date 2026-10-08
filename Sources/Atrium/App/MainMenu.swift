@@ -2,9 +2,9 @@ import AppKit
 
 @MainActor
 enum MainMenu {
-    static func build() -> NSMenu {
+    static func build(settingsTarget: AnyObject, settingsAction: Selector) -> NSMenu {
         let main = NSMenu()
-        main.addItem(submenuItem(appMenu()))
+        main.addItem(submenuItem(appMenu(settingsTarget: settingsTarget, settingsAction: settingsAction)))
         main.addItem(submenuItem(editMenu()))
         main.addItem(submenuItem(windowMenu()))
         return main
@@ -16,12 +16,13 @@ enum MainMenu {
         return item
     }
 
-    private static func appMenu() -> NSMenu {
+    private static func appMenu(settingsTarget: AnyObject, settingsAction: Selector) -> NSMenu {
         let name = AppInfo.name
         let menu = NSMenu(title: name)
         menu.addItem(withTitle: "About \(name)", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Settings…", action: nil, keyEquivalent: ",")
+        let settings = menu.addItem(withTitle: "Settings…", action: settingsAction, keyEquivalent: ",")
+        settings.target = settingsTarget
         menu.addItem(.separator())
         menu.addItem(withTitle: "Hide \(name)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let hideOthers = menu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")

@@ -1,6 +1,9 @@
 import AppKit
 import Observation
+import OSLog
 import AtriumCore
+
+private let log = Logger(subsystem: "com.alif.atrium", category: "store")
 
 @MainActor @Observable
 final class AppStore {
@@ -11,9 +14,69 @@ final class AppStore {
     var badges: [String: BadgeText] = [:]
     var isAXTrusted = false
 
-    init(apps: [ManagedApp] = []) { self.apps = apps }
+    /// Nil for the in-memory demo store: it never touches apps.json.
+    @ObservationIgnored private let storageURL: URL?
+
+    init(apps: [ManagedApp] = [], storageURL: URL? = nil) {
+        self.apps = apps
+        self.storageURL = storageURL
+    }
 
     var activeIndex: Int? { apps.firstIndex { $0.bundleIdentifier == activeBundleID } }
+
+    // MARK: Persistence
+
+    static var defaultStorageURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Atrium", isDirectory: true)
+            .appendingPathComponent("apps.json")
+    }
+
+    static func persistent() -> AppStore {
+        let url = defaultStorageURL
+        let result = AppLibrary.load(from: url)
+        if let backup = result.corruptBackup { log.error("apps.json was corrupt; moved to \(backup.path, privacy: .public)") }
+        return AppStore(apps: result.library.apps, storageURL: url)
+    }
+
+    private func commit(_ library: AppLibrary) {
+        apps = library.apps
+        guard let storageURL else { return }
+        do { try library.save(to: storageURL) } catch { log.error("save failed: \(error.localizedDescription, privacy: .public)") }
+    }
+
+    // MARK: Editing
+
+    func contains(bundleID: String) -> Bool { apps.contains { $0.bundleIdentifier == bundleID } }
+
+    @discardableResult
+    func add(_ app: ManagedApp) -> Bool {
+        var library = AppLibrary(apps: apps)
+        let added = library.add(app)
+        if added { commit(library) }
+        return added
+    }
+
+    func remove(bundleID: String) {
+        var library = AppLibrary(apps: apps)
+        library.remove(bundleIdentifier: bundleID)
+        commit(library)
+        if activeBundleID == bundleID { activeBundleID = nil }
+    }
+
+    func move(fromOffsets source: IndexSet, toOffset destination: Int) {
+        var library = AppLibrary(apps: apps)
+        library.move(fromOffsets: source, toOffset: destination)
+        commit(library)
+    }
+
+    func update(bundleID: String, _ change: (inout ManagedApp) -> Void) {
+        var library = AppLibrary(apps: apps)
+        library.update(bundleIdentifier: bundleID, change)
+        commit(library)
+    }
+
+    // MARK: Resolution
 
     /// bundle id first, then the last known path.
     func resolvedURL(for app: ManagedApp) -> URL? {
@@ -22,6 +85,8 @@ final class AppStore {
     }
 
     func isMissing(_ app: ManagedApp) -> Bool { resolvedURL(for: app) == nil }
+
+    // MARK: Demo
 
     /// `--demo`: real installed apps with fake running/active/badge states.
     static func demo() -> AppStore {

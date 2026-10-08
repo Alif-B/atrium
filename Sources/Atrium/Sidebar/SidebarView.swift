@@ -10,6 +10,7 @@ struct SidebarActions {
     var switchTo: @MainActor (ManagedApp) -> Void
     var showAddApps: @MainActor () -> Void
     var showSettings: @MainActor () -> Void
+    var locate: @MainActor (ManagedApp) -> Void
 }
 
 private struct UtilityButton: View {
@@ -51,10 +52,8 @@ struct SidebarView: View {
 
     @State private var lensIndex: Int?
     @State private var lensVisible = false
-    @State private var isLifted = false
 
     private var outerInset: CGFloat { railGlass == .swiftUI ? DesignTokens.gap : 0 }
-    private var liftEnabled: Bool { !LaunchOptions.lensFillOnly && !reduceMotion && !reduceTransparency }
 
     var body: some View {
         GeometryReader { geo in
@@ -86,6 +85,10 @@ struct SidebarView: View {
         }
         .padding(DesignTokens.sidebarPadding)
         .frame(width: DesignTokens.sidebarWidth)
+        .contextMenu {
+            Button("Add App…") { actions.showAddApps() }
+            Button("Settings…") { actions.showSettings() }
+        }
 
         switch railGlass {
         case .swiftUI:
@@ -118,12 +121,12 @@ struct SidebarView: View {
                     badge: prefs.showBadges ? store.badges[app.bundleIdentifier] : nil,
                     edge: prefs.sidebarEdge,
                     action: { actions.switchTo(app) })
+                .contextMenu { appMenu(app) }
             }
             UtilityButton(symbol: "plus", label: "Add App", isHovered: hover.target?.slot == .plus,
                           itemSize: metrics.itemSize, action: actions.showAddApps)
         }
         .background(alignment: .top) { lensFill(metrics: metrics) }
-        .overlay(alignment: .top) { liftedLens(metrics: metrics) }
     }
 
     private var gearButton: some View {
@@ -140,6 +143,27 @@ struct SidebarView: View {
             }
     }
 
+    // MARK: Context menu (§6 B8). No symbols: mixing symbol and plain rows breaks alignment.
+
+    @ViewBuilder
+    private func appMenu(_ app: ManagedApp) -> some View {
+        if store.isMissing(app) {
+            Button("Locate…") { actions.locate(app) }
+        } else {
+            Toggle("Snap Window When Opened", isOn: Binding(
+                get: { app.snapWindow },
+                set: { value in store.update(bundleID: app.bundleIdentifier) { $0.snapWindow = value } }))
+            Toggle("Open at Login", isOn: Binding(
+                get: { app.openAtLogin },
+                set: { value in store.update(bundleID: app.bundleIdentifier) { $0.openAtLogin = value } }))
+            Divider()
+            Button("Show in Finder") {
+                if let url = store.resolvedURL(for: app) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            }
+        }
+        Button("Remove from Sidebar", role: .destructive) { store.remove(bundleID: app.bundleIdentifier) }
+    }
+
     // MARK: Lens (§7.5)
 
     @ViewBuilder
@@ -147,28 +171,8 @@ struct SidebarView: View {
         if let i = lensIndex {
             LensFill(cornerRadius: DesignTokens.lensCornerRadius * metrics.scale)
                 .frame(width: metrics.itemSize, height: metrics.itemSize)
-                .opacity(lensVisible && !isLifted ? 1 : 0)
+                .opacity(lensVisible ? 1 : 0)
                 .offset(y: CGFloat(i) * metrics.pitch)
-        }
-    }
-
-    @ViewBuilder
-    private func liftedLens(metrics: SidebarMetrics) -> some View {
-        if let i = lensIndex, liftEnabled {
-            Color.clear
-                .frame(width: metrics.itemSize, height: metrics.itemSize)
-                .glassEffect(isLifted ? .regular : .identity,
-                             in: .rect(cornerRadius: DesignTokens.lensCornerRadius * metrics.scale, style: .continuous))
-                .keyframeAnimator(initialValue: 1.0, trigger: lensIndex) { content, scale in
-                    content.scaleEffect(scale)
-                } keyframes: { _ in
-                    KeyframeTrack {
-                        SpringKeyframe(1.08, duration: 0.13)
-                        SpringKeyframe(1.0, duration: 0.19)
-                    }
-                }
-                .offset(y: CGFloat(i) * metrics.pitch)
-                .allowsHitTesting(false)
         }
     }
 
@@ -187,12 +191,7 @@ struct SidebarView: View {
                 withAnimation(.easeIn(duration: 0.075)) { lensVisible = true }
             }
         } else {
-            if liftEnabled { withAnimation(.easeOut(duration: 0.1)) { isLifted = true } }
-            withAnimation(Motion.lensSlide, completionCriteria: .logicallyComplete) {
-                lensIndex = new
-            } completion: {
-                withAnimation(.easeIn(duration: 0.15)) { isLifted = false }
-            }
+            withAnimation(Motion.lensSlide) { lensIndex = new }
         }
     }
 
