@@ -11,3 +11,7 @@ if [[ ! -d "$FIX/ManifestAPI" ]]; then
   rm -f "$FIX"/ManifestAPI/PackageDescription.swiftmodule/*.private.swiftinterface
 fi
 export SWIFTPM_CUSTOM_LIBS_DIR="$FIX"
+
+# The default SDK here is macOS 27, whose SwiftUI needs the SwiftUIMacros plugin (ships with Xcode only, absent from the
+# Command Line Tools), so `@State` fails to compile. Pin the macOS 26 SDK, which matches the OS Atrium runs on.
+export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk

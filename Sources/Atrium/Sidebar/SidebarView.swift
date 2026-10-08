@@ -1,0 +1,226 @@
+import SwiftUI
+import AtriumCore
+
+enum RailGlass {
+    case swiftUI    // .glassEffect on the rail (variants a and b)
+    case appKit     // NSGlassEffectView supplies the glass (variant c)
+}
+
+struct SidebarActions {
+    var switchTo: @MainActor (ManagedApp) -> Void
+    var showAddApps: @MainActor () -> Void
+    var showSettings: @MainActor () -> Void
+}
+
+private struct UtilityButton: View {
+    let symbol: String
+    let label: String
+    let isHovered: Bool
+    let itemSize: CGFloat
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: DesignTokens.utilitySymbolSize, weight: .medium))
+                .foregroundStyle(isHovered ? Color.primary : Color.secondary)
+                .frame(width: itemSize, height: itemSize)
+                .background {
+                    RoundedRectangle(cornerRadius: DesignTokens.lensCornerRadius, style: .continuous)
+                        .fill(Color.primary.opacity(0.08))
+                        .opacity(isHovered ? 1 : 0)
+                        .animation(isHovered ? Motion.hoverIn : Motion.hoverOut, value: isHovered)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: DesignTokens.lensCornerRadius, style: .continuous))
+        }
+        .buttonStyle(PressScaleStyle())
+        .accessibilityLabel(Text(label))
+    }
+}
+
+struct SidebarView: View {
+    let store: AppStore
+    let prefs: Preferences
+    let hover: HoverState
+    let railGlass: RailGlass
+    let actions: SidebarActions
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    @State private var lensIndex: Int?
+    @State private var lensVisible = false
+    @State private var isLifted = false
+
+    private var outerInset: CGFloat { railGlass == .swiftUI ? DesignTokens.gap : 0 }
+    private var liftEnabled: Bool { !LaunchOptions.lensFillOnly && !reduceMotion && !reduceTransparency }
+
+    var body: some View {
+        GeometryReader { geo in
+            let glassHeight = geo.size.height - 2 * outerInset
+            let metrics = SidebarMetrics.fit(count: store.apps.count, glassHeight: glassHeight)
+            rail(metrics: metrics)
+                .onChange(of: hover.point) { _, p in updateHover(p, metrics: metrics, glassHeight: glassHeight) }
+        }
+        .onAppear {
+            lensIndex = store.activeIndex
+            lensVisible = lensIndex != nil
+        }
+        .onChange(of: store.activeIndex) { old, new in moveLens(from: old, to: new) }
+    }
+
+    // MARK: Rail
+
+    @ViewBuilder
+    private func rail(metrics: SidebarMetrics) -> some View {
+        let content = VStack(spacing: 0) {
+            itemsStack(metrics: metrics)
+            Spacer(minLength: 0)
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(height: 1 / (NSScreen.screens.first?.backingScaleFactor ?? 2))
+                .padding(.horizontal, DesignTokens.hairlineInset - DesignTokens.sidebarPadding)
+                .padding(.vertical, DesignTokens.hairlineSpacing)
+            gearButton
+        }
+        .padding(DesignTokens.sidebarPadding)
+        .frame(width: DesignTokens.sidebarWidth)
+
+        switch railGlass {
+        case .swiftUI:
+            content
+                .glassEffect(.regular, in: .rect(cornerRadius: DesignTokens.sidebarCornerRadius, style: .continuous))
+                .overlay {
+                    if contrast == .increased {
+                        RoundedRectangle(cornerRadius: DesignTokens.sidebarCornerRadius, style: .continuous)
+                            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+                    }
+                }
+                .padding(DesignTokens.gap)
+        case .appKit:
+            content
+        }
+    }
+
+    private func itemsStack(metrics: SidebarMetrics) -> some View {
+        VStack(spacing: metrics.spacing) {
+            ForEach(Array(store.apps.enumerated()), id: \.element.id) { index, app in
+                SidebarItemView(
+                    app: app,
+                    icon: IconCache.shared.icon(forPath: store.resolvedURL(for: app)?.path ?? app.lastKnownPath),
+                    metrics: metrics,
+                    isActive: store.activeBundleID == app.bundleIdentifier,
+                    isRunning: store.runningBundleIDs.contains(app.bundleIdentifier),
+                    isLaunching: store.launchingBundleIDs.contains(app.bundleIdentifier),
+                    isMissing: store.isMissing(app),
+                    isHovered: hover.target?.slot == .item(index),
+                    badge: prefs.showBadges ? store.badges[app.bundleIdentifier] : nil,
+                    edge: prefs.sidebarEdge,
+                    action: { actions.switchTo(app) })
+            }
+            UtilityButton(symbol: "plus", label: "Add App", isHovered: hover.target?.slot == .plus,
+                          itemSize: metrics.itemSize, action: actions.showAddApps)
+        }
+        .background(alignment: .top) { lensFill(metrics: metrics) }
+        .overlay(alignment: .top) { liftedLens(metrics: metrics) }
+    }
+
+    private var gearButton: some View {
+        UtilityButton(symbol: "gearshape", label: "Settings", isHovered: hover.target?.slot == .gear,
+                      itemSize: DesignTokens.itemSize, action: actions.showSettings)
+            .overlay(alignment: .topTrailing) {
+                if !store.isAXTrusted {
+                    Circle()
+                        .fill(Color(nsColor: .systemOrange))
+                        .frame(width: DesignTokens.amberDotSize, height: DesignTokens.amberDotSize)
+                        .offset(x: -6, y: 6)
+                        .accessibilityHidden(true)
+                }
+            }
+    }
+
+    // MARK: Lens (§7.5)
+
+    @ViewBuilder
+    private func lensFill(metrics: SidebarMetrics) -> some View {
+        if let i = lensIndex {
+            LensFill(cornerRadius: DesignTokens.lensCornerRadius * metrics.scale)
+                .frame(width: metrics.itemSize, height: metrics.itemSize)
+                .opacity(lensVisible && !isLifted ? 1 : 0)
+                .offset(y: CGFloat(i) * metrics.pitch)
+        }
+    }
+
+    @ViewBuilder
+    private func liftedLens(metrics: SidebarMetrics) -> some View {
+        if let i = lensIndex, liftEnabled {
+            Color.clear
+                .frame(width: metrics.itemSize, height: metrics.itemSize)
+                .glassEffect(isLifted ? .regular : .identity,
+                             in: .rect(cornerRadius: DesignTokens.lensCornerRadius * metrics.scale, style: .continuous))
+                .keyframeAnimator(initialValue: 1.0, trigger: lensIndex) { content, scale in
+                    content.scaleEffect(scale)
+                } keyframes: { _ in
+                    KeyframeTrack {
+                        SpringKeyframe(1.08, duration: 0.13)
+                        SpringKeyframe(1.0, duration: 0.19)
+                    }
+                }
+                .offset(y: CGFloat(i) * metrics.pitch)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func moveLens(from old: Int?, to new: Int?) {
+        guard let new else {
+            withAnimation(Motion.fade) { lensVisible = false }
+            return
+        }
+        if old == nil || lensIndex == nil || !lensVisible {
+            // First appearance: fade in at the destination, no travel.
+            withTransaction(Transaction(animation: nil)) { lensIndex = new }
+            withAnimation(Motion.fade) { lensVisible = true }
+        } else if reduceMotion {
+            withAnimation(.easeOut(duration: 0.075)) { lensVisible = false } completion: {
+                withTransaction(Transaction(animation: nil)) { lensIndex = new }
+                withAnimation(.easeIn(duration: 0.075)) { lensVisible = true }
+            }
+        } else {
+            if liftEnabled { withAnimation(.easeOut(duration: 0.1)) { isLifted = true } }
+            withAnimation(Motion.lensSlide, completionCriteria: .logicallyComplete) {
+                lensIndex = new
+            } completion: {
+                withAnimation(.easeIn(duration: 0.15)) { isLifted = false }
+            }
+        }
+    }
+
+    // MARK: Hover (§6 B1)
+
+    private func updateHover(_ point: CGPoint?, metrics: SidebarMetrics, glassHeight: CGFloat) {
+        guard let point else { hover.target = nil; return }
+        let x = point.x - outerInset
+        let y = point.y - outerInset
+        guard x >= 0, x <= DesignTokens.sidebarWidth, y >= 0, y <= glassHeight else { hover.target = nil; return }
+
+        let panelTop = DesignTokens.gap          // glass top inside the panel strip
+        let gearTop = glassHeight - DesignTokens.sidebarPadding - DesignTokens.itemSize
+        if y >= gearTop {
+            hover.target = HoverTarget(slot: .gear, title: "Settings",
+                                       centerYInPanel: panelTop + gearTop + DesignTokens.itemSize / 2)
+            return
+        }
+        let local = y - DesignTokens.sidebarPadding
+        guard local >= 0 else { hover.target = nil; return }
+        let index = Int(local / metrics.pitch)
+        let centerY = panelTop + DesignTokens.sidebarPadding + CGFloat(index) * metrics.pitch + metrics.itemSize / 2
+        if index < store.apps.count {
+            hover.target = HoverTarget(slot: .item(index), title: store.apps[index].displayName, centerYInPanel: centerY)
+        } else if index == store.apps.count {
+            hover.target = HoverTarget(slot: .plus, title: "Add App", centerYInPanel: centerY)
+        } else {
+            hover.target = nil
+        }
+    }
+}
