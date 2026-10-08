@@ -14,8 +14,10 @@ private func tempURL() -> URL {
 
 @Test func addDedupesByBundleID() {
     var lib = AppLibrary()
-    #expect(lib.add(app("a")))
-    #expect(!lib.add(app("a")))
+    let first = lib.add(app("a"))
+    let second = lib.add(app("a"))
+    #expect(first)
+    #expect(!second)
     #expect(lib.apps.count == 1)
 }
 
