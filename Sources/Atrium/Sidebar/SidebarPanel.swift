@@ -19,6 +19,15 @@ final class AtriumWindow: NSWindow {
     }
     override var canBecomeKey: Bool { true }       // borderless windows default to false
     override var canBecomeMain: Bool { true }
+
+    /// Called right after a mouse-down was handled (a click, or the end of a window drag). A click on an already-key window
+    /// still brings it to the front without any key/activation notification, so this is the reliable hook.
+    var onMouseDown: (@MainActor () -> Void)?
+
+    override func sendEvent(_ event: NSEvent) {
+        super.sendEvent(event)
+        if event.type == .leftMouseDown || event.type == .rightMouseDown { onMouseDown?() }
+    }
 }
 
 /// Rounded, softly translucent backdrop for the whole window. Visible in the gaps and while no app is snapped in.

@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var snapper: WindowSnapper?
     private var workspace: WorkspaceMonitor?
     private var permissions: PermissionMonitor?
+    private var orderCache: (pid: pid_t, number: Int, at: Date)?
     private var addAppsWindow: HostingWindowController?
     private var settingsWindow: SettingsWindowController?
 
@@ -43,8 +44,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 store: store, prefs: prefs, switcher: switcher,
                 onManagedActivated: { [weak self] id in self?.managedAppActivated(id) },
                 onTerminated: { [weak self] pid in self?.snapper?.appTerminated(pid: pid) })
-            sidebar.onFrameChange = { [weak self] in self?.snapper?.follow() }
+            sidebar.onFrameChange = { [weak self] in
+                self?.snapper?.follow()
+                self?.keepWorkspaceVisible()          // a drag may have started with Atrium raised above the app
+            }
             sidebar.onBecameKey = { [weak self] in self?.keepWorkspaceVisible() }
+            sidebar.window.onMouseDown = { [weak self] in self?.keepWorkspaceVisible() }
             snapper.onSnapped = { [weak self] in self?.keepWorkspaceVisible() }
             if let id = LaunchOptions.debugFollow { runFollowDiagnostic(bundleID: id) }
         }
@@ -58,7 +63,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func keepWorkspaceVisible() {
         guard snapper != nil, let id = store.activeBundleID, let pid = Launcher.runningApp(bundleID: id)?.processIdentifier,
-              snapper?.snappedPIDs.contains(pid) == true, let number = snapper?.windowNumber(pid: pid) else { return }
+              snapper?.snappedPIDs.contains(pid) == true else { return }
+        // CGWindowList is ~1 ms; this runs at up to 30 Hz during drags, so reuse the number for a second.
+        let number: Int
+        if let cached = orderCache, cached.pid == pid, Date().timeIntervalSince(cached.at) < 1 {
+            number = cached.number
+        } else {
+            guard let fresh = snapper?.windowNumber(pid: pid) else { return }
+            orderCache = (pid, fresh, Date())
+            number = fresh
+        }
         sidebar.window.order(.below, relativeTo: number)
     }
 
@@ -80,11 +94,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switcher.switchTo(app)
             try? await Task.sleep(for: .seconds(6))
             if LaunchOptions.debugOrder {
-                log.notice("diag: ordering Atrium to FRONT (simulated click)")
-                sidebar.window.orderFrontRegardless()
-                try? await Task.sleep(for: .seconds(3))
-                log.notice("diag: keepWorkspaceVisible()")
-                keepWorkspaceVisible()
+                // Two rounds of "Atrium raised above the app, then moved" (what a repeated drag does).
+                for round in 1...2 {
+                    store.activeBundleID = bundleID      // ignore unrelated activations during the diagnostic
+                    log.notice("diag: round \(round): Atrium to FRONT")
+                    sidebar.window.orderFrontRegardless()
+                    try? await Task.sleep(for: .seconds(2))
+                    var f = sidebar.window.frame
+                    f.origin.x += 40
+                    store.activeBundleID = bundleID
+                    sidebar.window.setFrame(f, display: true)
+                    log.notice("diag: round \(round): moved")
+                    try? await Task.sleep(for: .seconds(2))
+                }
                 return
             }
             for step in 1...10 {
