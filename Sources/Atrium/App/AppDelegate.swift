@@ -69,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             webApps.onWebAppFocused = { [weak self] slot in self?.managedAppActivated(slot) }
             snapper.onWindowGone = { [weak self] slot in
                 if slot.hasPrefix(ManagedApp.webAppIDPrefix) { self?.store.runningBundleIDs.remove(slot) }
+                if self?.store.activeBundleID == slot, slot.hasPrefix(ManagedApp.webAppIDPrefix) { self?.store.activeBundleID = nil }
             }
             permissions = PermissionMonitor(store: store)
             badgeMonitor = BadgeMonitor(store: store, prefs: prefs, snapper: snapper)
@@ -88,6 +89,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.keepWorkspaceVisible()          // a drag may have started with Atrium raised above the app
             }
             sidebar.onBecameKey = { [weak self] in self?.keepWorkspaceVisible(restoreLast: true, fresh: true) }
+            sidebar.onCheckOrder = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
+            switcher.onShown = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
             sidebar.window.onMouseDown = { [weak self] in self?.keepWorkspaceVisible(restoreLast: true, fresh: true) }
             snapper.onSnapped = { [weak self] in self?.keepWorkspaceVisible() }
             if let id = LaunchOptions.debugFollow { runFollowDiagnostic(bundleID: id) } else { preloadAll() }
@@ -112,19 +115,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             id = last
             store.activeBundleID = last
         }
-        guard let id, snapper.isPlaced(id) else { return }
-        // CGWindowList is ~1 ms; during drags this runs at up to 60 Hz, so reuse the number for a second.
-        var number: Int?
-        if !fresh, let cached = orderCache, cached.slot == id, Date().timeIntervalSince(cached.at) < 1 { number = cached.number }
-        if number == nil, let found = snapper.windowNumber(slot: id) {
-            orderCache = (id, found, Date())
-            number = found
+        guard let id, snapper.isPlaced(id), sidebar.window.isVisible else { return }
+        // During drags this runs at up to 60 Hz: reuse the number found in the last second and skip the order read.
+        if !fresh, let cached = orderCache, cached.slot == id, Date().timeIntervalSince(cached.at) < 1 {
+            sidebar.window.order(.below, relativeTo: cached.number)
+            return
         }
-        if let number {
-            sidebar.window.order(.below, relativeTo: number)
-        } else {
-            snapper.raise(slot: id)          // couldn't find its number: lift the window itself above Atrium
+        guard let found = snapper.order(of: id, against: sidebar.window.windowNumber) else {
+            if restoreLast { snapper.raise(slot: id) }       // not on screen (e.g. minimized): lift it on a click
+            return
         }
+        orderCache = (id, found.number, Date())
+        // Only touch the window order when Atrium is actually covering the app: an empty click costs one read, nothing more.
+        if found.atriumInFront { sidebar.window.order(.below, relativeTo: found.number) }
     }
 
     /// Dock-icon click brings the main window back (it can be closed with ⌘W without quitting).
@@ -174,6 +177,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             log.notice("diag: switching to \(bundleID, privacy: .public)")
             switcher.switchTo(app)
             try? await Task.sleep(for: .seconds(6))
+            if LaunchOptions.debugSettingsClose {
+                log.notice("diag: opening Settings")
+                showSettings()
+                try? await Task.sleep(for: .seconds(3))
+                log.notice("diag: closing Settings")
+                settingsWindow?.window?.performClose(nil)
+                return
+            }
             if LaunchOptions.debugEmptyClick {
                 store.activeBundleID = nil                     // the last thing used was some other app
                 log.notice("diag: no active app; Atrium forced to FRONT")

@@ -16,6 +16,8 @@ final class AppSwitcher {
     private(set) var inFlightBundleID: String?
     /// Web apps are opened by WebAppManager (their own browser window), not by launching a bundle.
     var openWebApp: (@MainActor (ManagedApp) -> Void)?
+    /// After an app's window was brought forward: put Atrium back right under it.
+    var onShown: (@MainActor () -> Void)?
 
     init(store: AppStore, prefs: Preferences, snapper: WindowSnapper) {
         self.store = store
@@ -28,6 +30,7 @@ final class AppSwitcher {
         guard let url = store.resolvedURL(for: app) else { return }
         let id = app.bundleIdentifier
         task?.cancel()
+        if bringForwardIfLoaded(app) { return }
         inFlightBundleID = id
         store.activeBundleID = id                       // the lens starts moving on this frame
         prefs.lastActiveBundleID = id
@@ -39,6 +42,34 @@ final class AppSwitcher {
         }
         let snap = prefs.snapOnSwitch && app.snapWindow
         task = Task { await run(id: id, url: url, wasRunning: wasRunning, snap: snap) }
+    }
+
+    /// The fast path. When the app is already running and its window already sits in Atrium, just lift that window and
+    /// hand focus to the app. No relaunch request: asking macOS to "open" a running app sends it a reopen event (Electron
+    /// apps re-show their window, which looks like a reload) and brings every one of its windows forward.
+    private func bringForwardIfLoaded(_ app: ManagedApp) -> Bool {
+        let id = app.bundleIdentifier
+        guard let running = Launcher.runningApp(bundleID: id), let window = snapper.placedWindow(id), AX.frame(window) != nil
+        else { return false }
+        store.activeBundleID = id
+        prefs.lastActiveBundleID = id
+        if AX.bool(window, kAXMinimizedAttribute) == true { AX.set(window, kAXMinimizedAttribute, false as CFBoolean) }
+        AX.raise(window)                                  // its own front window, so activation brings exactly this one
+        if NSApp.isActive { NSApp.yieldActivation(to: running) }
+        running.activate()
+        onShown?()
+        // If macOS ignored the activation, fall back to the full path once.
+        task = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, store.activeBundleID == id,
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier != running.processIdentifier else { return }
+            log.debug("fast switch didn't take for \(id, privacy: .public); using the full path")
+            if let url = store.resolvedURL(for: app) {
+                inFlightBundleID = id
+                await run(id: id, url: url, wasRunning: true, snap: prefs.snapOnSwitch && app.snapWindow)
+            }
+        }
+        return true
     }
 
     func bringLastActiveForward() {

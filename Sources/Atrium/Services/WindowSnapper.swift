@@ -193,6 +193,27 @@ final class WindowSnapper {
         return nil
     }
 
+    /// One read of the window order: the slot's window number, and whether `atrium` (Atrium's main window) is currently in
+    /// FRONT of it, i.e. covering the app. Nil when the slot's window isn't on screen (minimized, hidden, another Space).
+    func order(of slot: String, against atrium: Int) -> (number: Int, atriumInFront: Bool)? {
+        guard let p = placed[slot] else { return nil }
+        let target = AX.frame(p.window) ?? axTarget()
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        var atriumIndex: Int?
+        for (index, w) in list.enumerated() {          // front to back
+            guard let number = w[kCGWindowNumber as String] as? Int else { continue }
+            if number == atrium { atriumIndex = index; continue }
+            guard (w[kCGWindowOwnerPID as String] as? Int32) == p.pid, (w[kCGWindowLayer as String] as? Int) == 0,
+                  let b = w[kCGWindowBounds as String] as? [String: Double] else { continue }
+            let r = CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0)
+            if abs(r.minX - target.minX) < 2, abs(r.minY - target.minY) < 2,
+               abs(r.width - target.width) < 2, abs(r.height - target.height) < 2 {
+                return (number, atriumIndex != nil)          // Atrium was seen before (= in front of) the app's window
+            }
+        }
+        return nil
+    }
+
     func raise(slot: String) {
         guard let p = placed[slot] else { return }
         AX.raise(p.window)

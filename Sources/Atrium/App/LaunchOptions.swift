@@ -13,6 +13,8 @@ enum LaunchOptions {
     static let debugIcon: String? = CommandLine.arguments.first { $0.hasPrefix("--debug-icon=") }.map { String($0.dropFirst(13)) }
     /// With `--debug-follow`: simulate clicking Atrium's empty area while no sidebar app is current.
     static let debugEmptyClick = CommandLine.arguments.contains("--debug-empty-click")
+    /// With `--debug-follow`: open Settings, then close it (the "Atrium goes empty after Settings" case).
+    static let debugSettingsClose = CommandLine.arguments.contains("--debug-settings-close")
     /// Opens the Settings window at launch (used to verify it opens).
     static let debugSettings = CommandLine.arguments.contains("--debug-settings")
 }

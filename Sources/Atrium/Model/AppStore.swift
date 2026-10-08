@@ -41,6 +41,7 @@ final class AppStore {
 
     private func commit(_ library: AppLibrary) {
         apps = library.apps
+        urlCache.removeAll()
         guard let storageURL else { return }
         do { try library.save(to: storageURL) } catch { log.error("save failed: \(error.localizedDescription, privacy: .public)") }
     }
@@ -79,7 +80,18 @@ final class AppStore {
     // MARK: Resolution
 
     /// bundle id first, then the last known path.
+    /// Where each app lives. Asking Launch Services is cheap but not free, and the rail asks for every app on every
+    /// redraw, so answers are kept for 30 s (and dropped whenever the app list changes).
+    @ObservationIgnored private var urlCache: [String: (url: URL?, at: Date)] = [:]
+
     func resolvedURL(for app: ManagedApp) -> URL? {
+        if let hit = urlCache[app.bundleIdentifier], Date().timeIntervalSince(hit.at) < 30 { return hit.url }
+        let url = lookUpURL(for: app)
+        urlCache[app.bundleIdentifier] = (url, Date())
+        return url
+    }
+
+    private func lookUpURL(for app: ManagedApp) -> URL? {
         if app.isWebApp {        // a web app "exists" while its browser is installed
             return app.browserBundleID.flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
         }

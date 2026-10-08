@@ -46,6 +46,7 @@ final class WorkspaceMonitor {
             self?.onTerminated(pid)
             // Only "not running" if no other instance of that app is still alive.
             guard Launcher.runningApp(bundleID: id) == nil else { return }
+            if self?.store.activeBundleID == id { self?.store.activeBundleID = nil }     // it quit: no lens on a closed app
             self?.store.runningBundleIDs.remove(id)
             self?.store.launchingBundleIDs.remove(id)
             self?.store.badges[id] = nil

@@ -66,7 +66,6 @@ struct SidebarView: View {
             let glassHeight = geo.size.height - 2 * outerInset
             let metrics = SidebarMetrics.fit(count: store.apps.count, glassHeight: glassHeight)
             rail(metrics: metrics)
-                .onChange(of: hover.point) { _, p in updateHover(p, metrics: metrics, glassHeight: glassHeight) }
         }
         .onAppear {
             lensIndex = store.activeIndex
@@ -239,30 +238,26 @@ struct SidebarView: View {
 
     // MARK: Hover (§6 B1)
 
-    private func updateHover(_ point: CGPoint?, metrics: SidebarMetrics, glassHeight: CGFloat) {
-        guard let point else { hover.target = nil; return }
-        let x = point.x - outerInset
-        let y = point.y - outerInset
-        guard x >= 0, x <= DesignTokens.sidebarWidth, y >= 0, y <= glassHeight else { hover.target = nil; return }
+    /// What the pointer is over. Called by the controller on every mouse move, *outside* SwiftUI, so moving the pointer
+    /// doesn't redraw the rail; only a change of target does. `point` is top-left based, inside the glass.
+    static func hitTest(_ point: CGPoint?, glassHeight: CGFloat, apps: [ManagedApp]) -> HoverTarget? {
+        guard let point else { return nil }
+        let x = point.x, y = point.y
+        guard x >= 0, x <= DesignTokens.sidebarWidth, y >= 0, y <= glassHeight else { return nil }
+        let metrics = SidebarMetrics.fit(count: apps.count, glassHeight: glassHeight)
 
-        let panelTop = DesignTokens.gap          // glass top inside the panel strip
+        let panelTop = DesignTokens.gap          // glass top inside the window
         let gearTop = glassHeight - DesignTokens.sidebarPadding - DesignTokens.itemSize
         if y >= gearTop {
-            hover.target = HoverTarget(slot: .gear, title: "Settings",
-                                       centerYInPanel: panelTop + gearTop + DesignTokens.itemSize / 2)
-            return
+            return HoverTarget(slot: .gear, title: "Settings", centerYInPanel: panelTop + gearTop + DesignTokens.itemSize / 2)
         }
-        let itemsTop = metrics.itemsTop(count: store.apps.count, glassHeight: glassHeight)
+        let itemsTop = metrics.itemsTop(count: apps.count, glassHeight: glassHeight)
         let local = y - itemsTop
-        guard local >= 0 else { hover.target = nil; return }
+        guard local >= 0 else { return nil }
         let index = Int(local / metrics.pitch)
         let centerY = panelTop + itemsTop + CGFloat(index) * metrics.pitch + metrics.itemSize / 2
-        if index < store.apps.count {
-            hover.target = HoverTarget(slot: .item(index), title: store.apps[index].displayName, centerYInPanel: centerY)
-        } else if index == store.apps.count {
-            hover.target = HoverTarget(slot: .plus, title: "Add App", centerYInPanel: centerY)
-        } else {
-            hover.target = nil
-        }
+        if index < apps.count { return HoverTarget(slot: .item(index), title: apps[index].displayName, centerYInPanel: centerY) }
+        if index == apps.count { return HoverTarget(slot: .plus, title: "Add App", centerYInPanel: centerY) }
+        return nil
     }
 }

@@ -16,8 +16,6 @@ struct HoverTarget: Equatable {
 
 @MainActor @Observable
 final class HoverState {
-    /// Mouse position in the hosting view, top-left origin. Nil when outside.
-    var point: CGPoint?
     var target: HoverTarget? {
         didSet { if target != oldValue { onTargetChange?(target) } }
     }
