@@ -7,10 +7,18 @@ public struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
     public var lastKnownPath: String      // fallback when the bundle id can't be resolved
     public var snapWindow: Bool           // per-app opt-out
     public var openAtLogin: Bool          // launched hidden when Atrium starts
+    /// Web apps only: the site, the browser that hosts it (e.g. Microsoft Edge), and a cached icon PNG.
+    public var webURL: String?
+    public var browserBundleID: String?
+    public var iconFile: String?
+
+    public var isWebApp: Bool { webURL != nil }
+    public static let webAppIDPrefix = "atrium.web."
 
     public init(
         id: UUID = UUID(), bundleIdentifier: String, displayName: String, lastKnownPath: String,
-        snapWindow: Bool = true, openAtLogin: Bool = false
+        snapWindow: Bool = true, openAtLogin: Bool = false,
+        webURL: String? = nil, browserBundleID: String? = nil, iconFile: String? = nil
     ) {
         self.id = id
         self.bundleIdentifier = bundleIdentifier
@@ -18,6 +26,9 @@ public struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
         self.lastKnownPath = lastKnownPath
         self.snapWindow = snapWindow
         self.openAtLogin = openAtLogin
+        self.webURL = webURL
+        self.browserBundleID = browserBundleID
+        self.iconFile = iconFile
     }
 
     // Synthesized Codable ignores property defaults, so older JSON files need decodeIfPresent.
@@ -29,5 +40,26 @@ public struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
         lastKnownPath = try c.decodeIfPresent(String.self, forKey: .lastKnownPath) ?? ""
         snapWindow = try c.decodeIfPresent(Bool.self, forKey: .snapWindow) ?? true
         openAtLogin = try c.decodeIfPresent(Bool.self, forKey: .openAtLogin) ?? false
+        webURL = try c.decodeIfPresent(String.self, forKey: .webURL)
+        browserBundleID = try c.decodeIfPresent(String.self, forKey: .browserBundleID)
+        iconFile = try c.decodeIfPresent(String.self, forKey: .iconFile)
+    }
+}
+
+public enum WebAddress {
+    /// "jira.acme.com/board" → "https://jira.acme.com/board". Nil if it doesn't look like a web address.
+    public static func normalize(_ input: String) -> URL? {
+        var s = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty, !s.contains(" ") else { return nil }
+        if !s.lowercased().hasPrefix("http://") && !s.lowercased().hasPrefix("https://") { s = "https://" + s }
+        guard let url = URL(string: s), let host = url.host(), host.contains(".") || host == "localhost" else { return nil }
+        return url
+    }
+
+    /// A friendly default name from the host: "mail.google.com" → "Mail", "acme.atlassian.net" → "Acme".
+    public static func suggestedName(for url: URL) -> String {
+        let host = (url.host() ?? "").replacingOccurrences(of: "www.", with: "")
+        let first = host.split(separator: ".").first.map(String.init) ?? host
+        return first.prefix(1).uppercased() + first.dropFirst()
     }
 }

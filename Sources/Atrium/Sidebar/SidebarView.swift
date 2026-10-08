@@ -102,7 +102,7 @@ struct SidebarView: View {
             ForEach(Array(store.apps.enumerated()), id: \.element.id) { index, app in
                 SidebarItemView(
                     app: app,
-                    icon: IconCache.shared.icon(forPath: store.resolvedURL(for: app)?.path ?? app.lastKnownPath),
+                    icon: store.icon(for: app),
                     metrics: metrics,
                     isActive: store.activeBundleID == app.bundleIdentifier,
                     isRunning: store.runningBundleIDs.contains(app.bundleIdentifier),
@@ -121,7 +121,6 @@ struct SidebarView: View {
                         quit: { actions.quit(app) },
                         toggleSnap: { store.update(bundleID: app.bundleIdentifier) { $0.snapWindow.toggle() } },
                         toggleOpenAtLogin: { store.update(bundleID: app.bundleIdentifier) { $0.openAtLogin.toggle() } }))
-                .contextMenu { appMenu(app) }
             }
             UtilityButton(symbol: "plus", label: "Add App", isHovered: hover.target?.slot == .plus,
                           itemSize: metrics.itemSize, action: actions.showAddApps)
@@ -141,27 +140,6 @@ struct SidebarView: View {
                         .accessibilityHidden(true)
                 }
             }
-    }
-
-    // MARK: Context menu (§6 B8). No symbols: mixing symbol and plain rows breaks alignment.
-
-    @ViewBuilder
-    private func appMenu(_ app: ManagedApp) -> some View {
-        if store.isMissing(app) {
-            Button("Locate…") { actions.locate(app) }
-        } else {
-            Toggle("Snap Window When Opened", isOn: Binding(
-                get: { app.snapWindow },
-                set: { value in store.update(bundleID: app.bundleIdentifier) { $0.snapWindow = value } }))
-            Toggle("Open at Login", isOn: Binding(
-                get: { app.openAtLogin },
-                set: { value in store.update(bundleID: app.bundleIdentifier) { $0.openAtLogin = value } }))
-            Divider()
-            Button("Show in Finder") {
-                if let url = store.resolvedURL(for: app) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-            }
-        }
-        Button("Remove from Sidebar", role: .destructive) { store.remove(bundleID: app.bundleIdentifier) }
     }
 
     // MARK: Lens (§7.5)

@@ -11,6 +11,8 @@ final class WorkspaceMonitor {
     private let switcher: AppSwitcher
     private let onManagedActivated: @MainActor (String) -> Void
     private var observers: [NSObjectProtocol] = []
+    /// For apps that host several sidebar items (a browser with web apps): which item is in front, if any.
+    var slotResolver: (@MainActor (String) -> String?)?
     private var pidByBundleID: [String: pid_t] = [:]
     private let onTerminated: @MainActor (pid_t) -> Void
 
@@ -51,6 +53,12 @@ final class WorkspaceMonitor {
 
     private func handleActivate(_ id: String) {
         if id == Bundle.main.bundleIdentifier { return }                     // clicking Atrium's own window: leave state alone
+        if let slot = slotResolver?(id) {                                    // a web app's browser window came forward
+            store.activeBundleID = slot
+            prefs.lastActiveBundleID = slot
+            onManagedActivated(slot)
+            return
+        }
         guard store.apps.contains(where: { $0.bundleIdentifier == id }) else {
             store.activeBundleID = nil                                        // some other app: the lens fades out
             return

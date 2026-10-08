@@ -12,6 +12,7 @@ struct AddAppsView: View {
     @State private var loaded = false
     @State private var query = ""
     @FocusState private var searchFocused: Bool
+    @State private var showingWebApp = false
 
     private var filtered: [InstalledApp] {
         let q = query.trimmingCharacters(in: .whitespaces)
@@ -49,6 +50,7 @@ struct AddAppsView: View {
             Divider()
             HStack {
                 Button("Choose Other…") { chooseOther() }
+                Button("Add Web App…") { showingWebApp = true }
                 Spacer()
                 Button("Done") { onDone() }
                     .keyboardShortcut(.defaultAction)
@@ -63,6 +65,9 @@ struct AddAppsView: View {
             loaded = true
         }
         .onAppear { searchFocused = true }
+        .sheet(isPresented: $showingWebApp) {
+            AddWebAppView(store: store, onDone: { showingWebApp = false })
+        }
     }
 
     private var searchField: some View {

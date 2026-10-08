@@ -143,12 +143,12 @@ struct SidebarItemView: View {
                 if !isRunning { Button("Open", action: menu.open); Divider() }
                 Toggle("Snap Window When Opened", isOn: Binding(get: { app.snapWindow }, set: { _ in menu.toggleSnap() }))
                 Toggle("Open at Login", isOn: Binding(get: { app.openAtLogin }, set: { _ in menu.toggleOpenAtLogin() }))
-                Button("Show in Finder", action: menu.showInFinder)
+                if !app.isWebApp { Button("Show in Finder", action: menu.showInFinder) }
                 Button("Remove from Sidebar", role: .destructive, action: menu.remove)
                 if isRunning {
                     Divider()
-                    Button("Hide", action: menu.hide)
-                    Button("Quit", action: menu.quit)
+                    Button(app.isWebApp ? "Minimize" : "Hide", action: menu.hide)
+                    Button(app.isWebApp ? "Close Window" : "Quit", action: menu.quit)
                 }
             }
         }

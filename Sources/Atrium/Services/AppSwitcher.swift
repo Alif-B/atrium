@@ -14,6 +14,8 @@ final class AppSwitcher {
     private var task: Task<Void, Never>?
     /// The app a sidebar-initiated switch is currently working on (WorkspaceMonitor uses it to avoid double handling).
     private(set) var inFlightBundleID: String?
+    /// Web apps are opened by WebAppManager (their own browser window), not by launching a bundle.
+    var openWebApp: (@MainActor (ManagedApp) -> Void)?
 
     init(store: AppStore, prefs: Preferences, snapper: WindowSnapper) {
         self.store = store
@@ -22,6 +24,7 @@ final class AppSwitcher {
     }
 
     func switchTo(_ app: ManagedApp) {
+        if app.isWebApp { task?.cancel(); openWebApp?(app); return }
         guard let url = store.resolvedURL(for: app) else { return }
         let id = app.bundleIdentifier
         task?.cancel()
@@ -59,7 +62,7 @@ final class AppSwitcher {
             return
         }
 
-        if snap { snapper.snap(pid: running.processIdentifier, launching: !wasRunning) }
+        if snap { snapper.snap(slot: id, pid: running.processIdentifier, launching: !wasRunning) }
 
         // Fallback: activation from a background request can be ignored on macOS 14+.
         try? await Task.sleep(for: .milliseconds(250))

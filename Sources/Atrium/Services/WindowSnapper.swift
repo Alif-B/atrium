@@ -5,83 +5,99 @@ import OSLog
 
 private let log = Logger(subsystem: "com.alif.atrium", category: "snap")
 
-/// Places an app's real window over Atrium's workspace rectangle, and keeps it there as Atrium moves/resizes.
+/// Places real windows over Atrium's workspace rectangle and keeps them there as Atrium moves/resizes.
+///
+/// Windows are tracked per *slot* (a sidebar item's id), not per process: Edge web apps are several windows of one
+/// Edge process, each belonging to a different sidebar item.
 @MainActor
 final class WindowSnapper {
+    struct Placed {
+        let pid: pid_t
+        let window: AXUIElement
+    }
+
     private let store: AppStore
     private let workspaceRect: @MainActor () -> CGRect          // Cocoa screen coordinates
-    private var snapped: [pid_t: AXUIElement] = [:]
+    private var placed: [String: Placed] = [:]
     private var task: Task<Void, Never>?
     private var followTask: Task<Void, Never>?
     private let liveMover = LiveMover()
     /// Last size we asked the active window to take; while it stays the same, live moves send position only.
-    private var liveSize: [pid_t: CGSize] = [:]
+    private var liveSize: [String: CGSize] = [:]
+    /// Watches each placed window: if the user moves or resizes it by hand, put it back (Atrium owns the geometry).
+    private var guards: [String: AXWindowObserver] = [:]
+    private var restoreTasks: [String: Task<Void, Never>] = [:]
+    /// Windows that refused the target size (e.g. an app minimum larger than Atrium's area). We stop fighting them
+    /// until the next snap or Atrium move, so we never loop forever.
+    private var unfittable: Set<String> = []
+
     /// Called after a window was fitted, so Atrium can slot itself under it.
     var onSnapped: (@MainActor () -> Void)?
+    /// Called when a placed window is closed (so web apps can show as "not running").
+    var onWindowGone: (@MainActor (String) -> Void)?
 
     init(store: AppStore, workspaceRect: @escaping @MainActor () -> CGRect) {
         self.store = store
         self.workspaceRect = workspaceRect
     }
 
-    /// Watches each placed window: if the user moves or resizes it by hand, put it back (Atrium owns the geometry).
-    private var guards: [pid_t: AXWindowObserver] = [:]
-    private var restoreTasks: [pid_t: Task<Void, Never>] = [:]
-    /// Windows that refused the target size (e.g. an app minimum larger than Atrium's area). We stop fighting them
-    /// until the next snap or Atrium move, so we never loop forever.
-    private var unfittable: Set<pid_t> = []
+    func isPlaced(_ slot: String) -> Bool { placed[slot] != nil }
+    func placedWindow(_ slot: String) -> AXUIElement? { placed[slot]?.window }
+    /// Which slot (if any) owns this window.
+    func slot(for window: AXUIElement) -> String? { placed.first { CFEqual($0.value.window, window) }?.key }
 
-    var snappedPIDs: Set<pid_t> { Set(snapped.keys) }
-
-    func appTerminated(pid: pid_t) { forget(pid) }
-
-    private func forget(_ pid: pid_t) {
-        snapped[pid] = nil
-        liveSize[pid] = nil
-        restoreTasks.removeValue(forKey: pid)?.cancel()
-        if let g = guards.removeValue(forKey: pid) {
-            Task { @MainActor in g.invalidate() }      // never tear down from inside its own callback
-        }
+    func appTerminated(pid: pid_t) {
+        for (slot, p) in placed where p.pid == pid { forget(slot) }
     }
 
-    private func guardWindow(_ window: AXUIElement, pid: pid_t) {
-        if let old = guards.removeValue(forKey: pid) { old.invalidate() }
-        guards[pid] = AXWindowObserver(
+    func forget(_ slot: String) {
+        guard placed.removeValue(forKey: slot) != nil else { return }
+        liveSize[slot] = nil
+        restoreTasks.removeValue(forKey: slot)?.cancel()
+        if let g = guards.removeValue(forKey: slot) {
+            Task { @MainActor in g.invalidate() }      // never tear down from inside its own callback
+        }
+        onWindowGone?(slot)
+    }
+
+    private func guardWindow(_ window: AXUIElement, pid: pid_t, slot: String) {
+        if let old = guards.removeValue(forKey: slot) { old.invalidate() }
+        guards[slot] = AXWindowObserver(
             pid: pid, element: window,
             notifications: [kAXMovedNotification, kAXResizedNotification, kAXUIElementDestroyedNotification]
-        ) { [weak self] name in self?.windowChangedExternally(pid: pid, notification: name) }
+        ) { [weak self] name in self?.windowChangedExternally(slot: slot, notification: name) }
     }
 
     /// Debounced: wait until the user stops dragging/resizing, then fit it back. Our own moves land here too, but
     /// `apply` is a no-op when the window is already in place, so there is no feedback loop.
-    private func windowChangedExternally(pid: pid_t, notification: String) {
-        if notification == kAXUIElementDestroyedNotification { forget(pid); return }
-        restoreTasks[pid]?.cancel()
-        restoreTasks[pid] = Task { [weak self] in
+    private func windowChangedExternally(slot: String, notification: String) {
+        if notification == kAXUIElementDestroyedNotification { forget(slot); return }
+        restoreTasks[slot]?.cancel()
+        restoreTasks[slot] = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(200))
-            guard !Task.isCancelled, let self, let window = self.snapped[pid], !self.unfittable.contains(pid) else { return }
-            self.apply(window, app: AX.app(pid))
-            if let f = AX.frame(window), !self.matches(f, self.axTarget()) {
-                self.unfittable.insert(pid)
-                log.notice("pid \(pid) won't take the target frame; leaving it until the next fit")
+            guard !Task.isCancelled, let self, let p = self.placed[slot], !self.unfittable.contains(slot) else { return }
+            self.apply(p.window, app: AX.app(p.pid))
+            if let f = AX.frame(p.window), !self.matches(f, self.axTarget()) {
+                self.unfittable.insert(slot)
+                log.notice("\(slot, privacy: .public) won't take the target frame; leaving it until the next fit")
             }
         }
     }
 
     /// Target frame in AX coordinates, computed fresh every time.
-    private func axTarget() -> CGRect {
+    func axTarget() -> CGRect {
         let primary = NSScreen.screens.first?.frame ?? .zero
         return ScreenLayout.axRect(fromCocoa: workspaceRect(), primaryScreenFrame: primary)
     }
 
-    /// Finds the app's main window (waiting for it if the app is launching or reopening) and fits it to the workspace.
-    func snap(pid: pid_t, launching: Bool) {
+    /// Native apps: find the app's main window (waiting if it is launching or reopening) and fit it.
+    func snap(slot: String, pid: pid_t, launching: Bool) {
         guard store.isAXTrusted else { return }
         task?.cancel()
-        task = Task { await run(pid: pid, launching: launching) }
+        task = Task { await run(slot: slot, pid: pid, launching: launching) }
     }
 
-    private func run(pid: pid_t, launching: Bool) async {
+    private func run(slot: String, pid: pid_t, launching: Bool) async {
         let app = AX.app(pid)
         let deadline = Date().addingTimeInterval(launching ? 20 : 5)
         var window: AXUIElement?
@@ -90,22 +106,30 @@ final class WindowSnapper {
             try? await Task.sleep(for: .milliseconds(150))
         }
         guard !Task.isCancelled else { return }
-        guard let window else { log.notice("no window for pid \(pid) before timeout"); return }
-        guard !AX.isFullScreen(window) else { log.debug("pid \(pid) is full screen; not snapping"); return }
+        guard let window else { log.notice("no window for \(slot, privacy: .public) before timeout"); return }
+        await place(slot: slot, pid: pid, window: window)
+    }
 
+    /// A known window (web apps): fit it, guard it, and track it under `slot`.
+    func place(slot: String, pid: pid_t, window: AXUIElement) async {
+        guard store.isAXTrusted else { return }
+        guard !AX.isFullScreen(window) else { log.debug("\(slot, privacy: .public) is full screen; not snapping"); return }
         if AX.bool(window, kAXMinimizedAttribute) == true { AX.set(window, kAXMinimizedAttribute, false as CFBoolean) }
-        unfittable.remove(pid)
+        let app = AX.app(pid)
+        unfittable.remove(slot)
         apply(window, app: app)
-        snapped[pid] = window
-        guardWindow(window, pid: pid)
-        log.notice("snap complete for pid \(pid)")
+        if placed[slot].map({ !CFEqual($0.window, window) }) ?? true {
+            placed[slot] = Placed(pid: pid, window: window)
+            guardWindow(window, pid: pid, slot: slot)
+        }
+        log.notice("placed \(slot, privacy: .public)")
         AX.raise(window)
         onSnapped?()
 
-        // Electron apps restore their saved bounds shortly after showing a window: re-check twice.
+        // Electron/Chromium apps restore their saved bounds shortly after showing a window: re-check twice.
         for delay in [300, 700] {
             try? await Task.sleep(for: .milliseconds(delay))
-            guard !Task.isCancelled else { return }
+            guard placed[slot] != nil else { return }
             apply(window, app: app)
         }
     }
@@ -118,50 +142,51 @@ final class WindowSnapper {
         let target = axTarget()
         if let current = AX.frame(window), matches(current, target) { return }
         AX.setFrame(window, app: app, to: target)
-        log.notice("snapped to \(NSStringFromRect(target), privacy: .public)")
     }
 
-    /// Atrium moved or resized: carry every placed window along. The visible (active) one moves live, throttled;
-    /// the hidden ones (stacked behind Atrium) catch up once the drag pauses, which keeps dragging smooth.
+    /// Atrium moved or resized: carry every placed window along. The visible (active) one moves live (off the main
+    /// thread, coalesced); the hidden ones (stacked behind Atrium) catch up once the drag pauses.
     func follow() {
-        guard store.isAXTrusted, !snapped.isEmpty else { return }
+        guard store.isAXTrusted, !placed.isEmpty else { return }
         unfittable.removeAll()
-        let activePID = store.activeBundleID.flatMap { Launcher.runningApp(bundleID: $0)?.processIdentifier }
-        if let activePID, let window = snapped[activePID] {
+        if let active = store.activeBundleID, let p = placed[active] {
             let target = axTarget()
-            let resize = liveSize[activePID] != target.size
-            liveSize[activePID] = target.size
-            liveMover.move(window, to: target, resize: resize)
+            let resize = liveSize[active] != target.size
+            liveSize[active] = target.size
+            liveMover.move(p.window, to: target, resize: resize)
         }
         followTask?.cancel()
         followTask = Task {
             try? await Task.sleep(for: .milliseconds(120))
             guard !Task.isCancelled else { return }
             self.liveSize.removeAll()            // next drag re-sends size once, in case an app nudged it
-            for (pid, window) in snapped {
-                if AX.frame(window) == nil { forget(pid); continue }          // window was closed
-                apply(window, app: AX.app(pid))
+            for (slot, p) in self.placed {
+                if AX.frame(p.window) == nil { self.forget(slot); continue }          // window was closed
+                self.apply(p.window, app: AX.app(p.pid))
             }
         }
     }
 
-    /// The window-server number of the app's largest normal on-screen window (public CGWindowList API; no permission needed).
-    func windowNumber(pid: pid_t) -> Int? {
+    /// The window-server number of the slot's window (public CGWindowList API; no permission needed).
+    /// Placed windows sit exactly on the workspace rect, so match the owner pid + bounds; when several are stacked
+    /// there (e.g. two Edge web apps), CGWindowList is front-to-back, so the first match is the visible one.
+    func windowNumber(slot: String) -> Int? {
+        guard let p = placed[slot] else { return nil }
+        let target = AX.frame(p.window) ?? axTarget()      // AX and CG share top-left global coordinates
         let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
-        var best: (number: Int, area: Double)?
         for w in list {
-            guard (w[kCGWindowOwnerPID as String] as? Int32) == pid, (w[kCGWindowLayer as String] as? Int) == 0,
+            guard (w[kCGWindowOwnerPID as String] as? Int32) == p.pid, (w[kCGWindowLayer as String] as? Int) == 0,
                   let number = w[kCGWindowNumber as String] as? Int,
                   let b = w[kCGWindowBounds as String] as? [String: Double] else { continue }
-            let area = (b["Width"] ?? 0) * (b["Height"] ?? 0)
-            if area > (best?.area ?? 0) { best = (number, area) }
+            let r = CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0)
+            if abs(r.minX - target.minX) < 2, abs(r.minY - target.minY) < 2,
+               abs(r.width - target.width) < 2, abs(r.height - target.height) < 2 { return number }
         }
-        return best?.number
+        return nil
     }
 
-    /// Brings Atrium's window forward and then lifts the snapped app's window above it (they overlap in the workspace).
-    func raiseSnapped(pid: pid_t) {
-        guard let window = snapped[pid] else { return }
-        AX.raise(window)
+    func raise(slot: String) {
+        guard let p = placed[slot] else { return }
+        AX.raise(p.window)
     }
 }

@@ -80,11 +80,19 @@ final class AppStore {
 
     /// bundle id first, then the last known path.
     func resolvedURL(for app: ManagedApp) -> URL? {
+        if app.isWebApp {        // a web app "exists" while its browser is installed
+            return app.browserBundleID.flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
+        }
         if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleIdentifier) { return url }
         return FileManager.default.fileExists(atPath: app.lastKnownPath) ? URL(fileURLWithPath: app.lastKnownPath) : nil
     }
 
     func isMissing(_ app: ManagedApp) -> Bool { resolvedURL(for: app) == nil }
+
+    func icon(for app: ManagedApp) -> NSImage {
+        if let file = app.iconFile, let image = IconCache.shared.image(atPath: file) { return image }
+        return IconCache.shared.icon(forPath: resolvedURL(for: app)?.path ?? app.lastKnownPath)
+    }
 
     // MARK: Demo
 

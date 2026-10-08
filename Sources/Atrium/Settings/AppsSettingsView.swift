@@ -42,13 +42,13 @@ struct AppsSettingsView: View {
 
     private func row(_ app: ManagedApp) -> some View {
         HStack(spacing: 10) {
-            Image(nsImage: IconCache.shared.icon(forPath: store.resolvedURL(for: app)?.path ?? app.lastKnownPath))
+            Image(nsImage: store.icon(for: app))
                 .resizable().interpolation(.high)
                 .frame(width: 28, height: 28)
                 .opacity(store.isMissing(app) ? 0.4 : 1)
             VStack(alignment: .leading, spacing: 1) {
                 Text(app.displayName).font(.system(size: 13, weight: .medium))
-                Text(store.isMissing(app) ? "Can't find this app" : (store.resolvedURL(for: app)?.path ?? app.lastKnownPath))
+                Text(store.isMissing(app) ? (app.isWebApp ? "Microsoft Edge isn't installed" : "Can't find this app") : (app.webURL ?? store.resolvedURL(for: app)?.path ?? app.lastKnownPath))
                     .font(.system(size: 11))
                     .foregroundStyle(store.isMissing(app) ? Color(nsColor: .systemOrange) : Color.secondary)
                     .lineLimit(1)

@@ -14,7 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var snapper: WindowSnapper?
     private var workspace: WorkspaceMonitor?
     private var permissions: PermissionMonitor?
-    private var orderCache: (pid: pid_t, number: Int, at: Date)?
+    private var orderCache: (slot: String, number: Int, at: Date)?
+    private var webApps: WebAppManager?
     private var addAppsWindow: HostingWindowController?
     private var settingsWindow: SettingsWindowController?
 
@@ -31,19 +32,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let url = self?.store.resolvedURL(for: app) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
             },
             remove: { [weak self] app in self?.store.remove(bundleID: app.bundleIdentifier) },
-            hide: { app in Launcher.runningApp(bundleID: app.bundleIdentifier)?.hide() },
-            quit: { app in Launcher.runningApp(bundleID: app.bundleIdentifier)?.terminate() })
+            hide: { [weak self] app in
+                if app.isWebApp { self?.webApps?.minimize(app) } else { Launcher.runningApp(bundleID: app.bundleIdentifier)?.hide() }
+            },
+            quit: { [weak self] app in
+                if app.isWebApp { self?.webApps?.closeWindow(app) } else { Launcher.runningApp(bundleID: app.bundleIdentifier)?.terminate() }
+            })
         sidebar = SidebarController(store: store, prefs: prefs, actions: actions)
         sidebar.show()
         if !LaunchOptions.demo {
             let snapper = WindowSnapper(store: store, workspaceRect: { [weak self] in self?.sidebar.workspaceRect ?? .zero })
             self.snapper = snapper
             switcher = AppSwitcher(store: store, prefs: prefs, snapper: snapper)
+            let webApps = WebAppManager(store: store, prefs: prefs, snapper: snapper)
+            self.webApps = webApps
+            switcher.openWebApp = { app in webApps.open(app) }
+            webApps.onWebAppFocused = { [weak self] slot in self?.managedAppActivated(slot) }
+            snapper.onWindowGone = { [weak self] slot in
+                if slot.hasPrefix(ManagedApp.webAppIDPrefix) { self?.store.runningBundleIDs.remove(slot) }
+            }
             permissions = PermissionMonitor(store: store)
             workspace = WorkspaceMonitor(
                 store: store, prefs: prefs, switcher: switcher,
                 onManagedActivated: { [weak self] id in self?.managedAppActivated(id) },
-                onTerminated: { [weak self] pid in self?.snapper?.appTerminated(pid: pid) })
+                onTerminated: { [weak self] pid in
+                    self?.snapper?.appTerminated(pid: pid)
+                    self?.webApps?.browserTerminated(pid: pid)
+                })
+            workspace?.slotResolver = { id in
+                webApps.hostsWebApps(id) ? webApps.resolveFocusedSlot(browserBundleID: id) : nil
+            }
             sidebar.onFrameChange = { [weak self] in
                 self?.snapper?.follow()
                 self?.keepWorkspaceVisible()          // a drag may have started with Atrium raised above the app
@@ -62,15 +80,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidBecomeActive(_ notification: Notification) { keepWorkspaceVisible() }
 
     func keepWorkspaceVisible() {
-        guard snapper != nil, let id = store.activeBundleID, let pid = Launcher.runningApp(bundleID: id)?.processIdentifier,
-              snapper?.snappedPIDs.contains(pid) == true else { return }
+        guard let snapper, let id = store.activeBundleID, snapper.isPlaced(id) else { return }
         // CGWindowList is ~1 ms; this runs at up to 30 Hz during drags, so reuse the number for a second.
         let number: Int
-        if let cached = orderCache, cached.pid == pid, Date().timeIntervalSince(cached.at) < 1 {
+        if let cached = orderCache, cached.slot == id, Date().timeIntervalSince(cached.at) < 1 {
             number = cached.number
         } else {
-            guard let fresh = snapper?.windowNumber(pid: pid) else { return }
-            orderCache = (pid, fresh, Date())
+            guard let fresh = snapper.windowNumber(slot: id) else { return }
+            orderCache = (id, fresh, Date())
             number = fresh
         }
         sidebar.window.order(.below, relativeTo: number)
@@ -124,15 +141,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// A managed app came forward from somewhere else (⌘-Tab, Dock, its own window): snap it once, and keep Atrium's
     /// rail visible next to it.
     private func managedAppActivated(_ id: String) {
-        guard let app = store.apps.first(where: { $0.bundleIdentifier == id }),
-              let running = Launcher.runningApp(bundleID: id) else { return }
-        let pid = running.processIdentifier
+        guard let app = store.apps.first(where: { $0.bundleIdentifier == id }) else { return }
         sidebar.window.orderFrontRegardless()
-        if prefs.snapOnSwitch, app.snapWindow, snapper?.snappedPIDs.contains(pid) == false {
-            snapper?.snap(pid: pid, launching: false)
-        } else {
+        if snapper?.isPlaced(id) == true || app.isWebApp || !prefs.snapOnSwitch || !app.snapWindow {
             keepWorkspaceVisible()
+            return
         }
+        guard let running = Launcher.runningApp(bundleID: id) else { return }
+        snapper?.snap(slot: id, pid: running.processIdentifier, launching: false)
     }
 
     private func handleClick(_ app: ManagedApp) {
