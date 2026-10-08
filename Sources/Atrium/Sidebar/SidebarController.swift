@@ -2,71 +2,81 @@ import AppKit
 import SwiftUI
 import AtriumCore
 
+/// Owns the Atrium window: the glass rail on one side, and the "workspace" rectangle where the selected app's
+/// real window is placed (M4). Everything is derived from the window's current frame, so moving, resizing or
+/// dragging it to another display just works.
 @MainActor
 final class SidebarController {
-    let panel: SidebarPanel
+    let window: AtriumWindow
     private(set) var layout: LayoutResult
     private let prefs: Preferences
     private let hover = HoverState()
     private let labelPanel = HoverLabelPanel()
-    private var glassView: NSGlassEffectView?
-    private var relayoutTask: Task<Void, Never>?
+    private let glassView = NSGlassEffectView()
+    private var observers: [NSObjectProtocol] = []
     private var screenTask: Task<Void, Never>?
+
+    /// Called after the window moved, resized or changed display (debounced by AppKit's live-resize end).
+    var onFrameChange: (@MainActor () -> Void)?
 
     init(store: AppStore, prefs: Preferences, actions: SidebarActions) {
         self.prefs = prefs
-        let initial = Self.computeLayout(edge: prefs.sidebarEdge)
-        layout = initial
-        panel = SidebarPanel(contentRect: initial.panel)
+        let size = DesignTokens.defaultWindowSize
+        let visible = NSScreen.main?.visibleFrame ?? NSScreen.screens.first?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 875)
+        let origin = CGPoint(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2)
+        window = AtriumWindow(contentRect: CGRect(origin: origin, size: size))   // autosaved frame (if any) overrides below
+        layout = ScreenLayout.compute(visibleFrame: window.frame, edge: prefs.sidebarEdge)
 
         let host = SidebarHostingView(rootView: SidebarView(store: store, prefs: prefs, hover: hover, actions: actions))
         host.sizingOptions = []
         host.onHover = { [hover] point in hover.point = point }
 
-        let container = NSView()
-        let glass = NSGlassEffectView()
-        glass.cornerRadius = DesignTokens.sidebarCornerRadius
-        glass.contentView = host
-        container.addSubview(glass)
-        panel.contentView = container
-        glassView = glass
+        let backdrop = WindowBackdropView(frame: CGRect(origin: .zero, size: size))
+        glassView.cornerRadius = DesignTokens.sidebarCornerRadius
+        glassView.contentView = host
+        backdrop.addSubview(glassView)
+        window.contentView = backdrop
 
         hover.onTargetChange = { [weak self] target in self?.updateLabel(target) }
         prefs.onLayoutChange = { [weak self] in self?.relayout() }
 
+        let center = NotificationCenter.default
+        for name in [NSWindow.didResizeNotification, NSWindow.didMoveNotification, NSWindow.didChangeScreenNotification] {
+            observers.append(center.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.frameChanged() }
+            })
+        }
+        observers.append(center.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.onFrameChange?() }
+        })
         screenTask = Task { [weak self] in
-            for await _ in NotificationCenter.default.notifications(named: NSApplication.didChangeScreenParametersNotification) {
-                self?.scheduleRelayout()
+            for await _ in center.notifications(named: NSApplication.didChangeScreenParametersNotification) {
+                try? await Task.sleep(for: .milliseconds(300))      // display changes arrive in bursts
+                guard !NSScreen.screens.isEmpty else { continue }
+                self?.frameChanged()
+                self?.onFrameChange?()
             }
         }
         relayout()
     }
 
     func show() {
+        window.makeKeyAndOrderFront(nil)
         relayout()
-        panel.orderFrontRegardless()
     }
 
-    private static func computeLayout(edge: SidebarEdge) -> LayoutResult {
-        // Always the primary display (the one with the menu bar).
-        let visible = NSScreen.screens.first?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 875)
-        return ScreenLayout.compute(visibleFrame: visible, edge: edge)
-    }
+    /// The rectangle (Cocoa screen coordinates) the active app's window should fill.
+    var workspaceRect: CGRect { layout.workspace }
 
     func relayout() {
-        layout = Self.computeLayout(edge: prefs.sidebarEdge)
-        panel.setFrame(layout.panel, display: true)
-        glassView?.frame = layout.glass.offsetBy(dx: -layout.panel.minX, dy: -layout.panel.minY)
+        layout = ScreenLayout.compute(visibleFrame: window.frame, edge: prefs.sidebarEdge)
+        glassView.frame = layout.glass.offsetBy(dx: -window.frame.minX, dy: -window.frame.minY)
+        window.invalidateShadow()
     }
 
-    /// Display changes arrive in bursts; wait 300 ms and ignore the "no screens" moment while reconfiguring.
-    private func scheduleRelayout() {
-        relayoutTask?.cancel()
-        relayoutTask = Task {
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled, !NSScreen.screens.isEmpty else { return }
-            relayout()
-        }
+    private func frameChanged() {
+        relayout()
+        onFrameChange?()
     }
 
     private func updateLabel(_ target: HoverTarget?) {

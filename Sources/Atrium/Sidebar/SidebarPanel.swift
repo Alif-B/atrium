@@ -1,23 +1,43 @@
 import AppKit
 import SwiftUI
 
-final class SidebarPanel: NSPanel {
+/// The main Atrium window: borderless (no title bar), movable by dragging any empty background, resizable from its edges.
+final class AtriumWindow: NSWindow {
     init(contentRect: NSRect) {
-        super.init(contentRect: contentRect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        level = .normal
-        isFloatingPanel = false
-        hidesOnDeactivate = false
-        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        super.init(contentRect: contentRect, styleMask: [.borderless, .resizable, .miniaturizable, .closable],
+                   backing: .buffered, defer: false)
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = false
-        isMovable = false
+        hasShadow = true
+        isMovableByWindowBackground = true
         isReleasedWhenClosed = false
-        isExcludedFromWindowsMenu = true
-        animationBehavior = .none
+        isRestorable = false
+        title = AppInfo.name                       // shown in the Window menu and Mission Control
+        minSize = NSSize(width: 520, height: 360)
+        collectionBehavior = [.managed, .participatesInCycle]
+        setFrameAutosaveName("AtriumMainWindow")
     }
-    override var canBecomeKey: Bool { false }
-    override var canBecomeMain: Bool { false }
+    override var canBecomeKey: Bool { true }       // borderless windows default to false
+    override var canBecomeMain: Bool { true }
+}
+
+/// Rounded, softly translucent backdrop for the whole window. Visible in the gaps and while no app is snapped in.
+final class WindowBackdropView: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = DesignTokens.windowCornerRadius
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+        let blur = NSVisualEffectView(frame: bounds)
+        blur.material = .underWindowBackground
+        blur.blendingMode = .behindWindow
+        blur.state = .active
+        blur.autoresizingMask = [.width, .height]
+        addSubview(blur)
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError("not used") }
+    override var mouseDownCanMoveWindow: Bool { true }
 }
 
 /// First click works even though the panel is never key; hover comes from an always-active tracking area

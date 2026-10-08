@@ -11,6 +11,8 @@ enum DesignTokens {
     static let itemPitch = LayoutConstants.itemPitch
 
     static let sidebarCornerRadius: CGFloat = 24
+    static let windowCornerRadius: CGFloat = 26      // Tahoe window radius; the rail (24) sits inside it
+    static let defaultWindowSize = CGSize(width: 1180, height: 760)
     static let iconSize: CGFloat = 40
     static let lensCornerRadius: CGFloat = 14
     static let runningDotSize: CGFloat = 4

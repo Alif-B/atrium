@@ -28,6 +28,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
+    /// Dock-icon click brings the main window back (it can be closed with ⌘W without quitting).
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        sidebar.show()
+        return false
+    }
+
     // MARK: Actions
 
     private func handleClick(_ app: ManagedApp) {
