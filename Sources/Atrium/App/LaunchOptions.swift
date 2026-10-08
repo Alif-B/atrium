@@ -20,6 +20,8 @@ enum LaunchOptions {
     static let debugClick: String? = CommandLine.arguments.first { $0.hasPrefix("--debug-click=") }.map { String($0.dropFirst(14)) }
     /// `--debug-drag`: post a real drag on empty rail space; log how far the window and the rail moved.
     static let debugDrag = CommandLine.arguments.contains("--debug-drag")
+    /// `--debug-hibernate-after=<seconds>`: use a short idle limit to test hibernation.
+    static let debugHibernateSeconds: Int? = CommandLine.arguments.first { $0.hasPrefix("--debug-hibernate-after=") }.flatMap { Int($0.dropFirst(24)) }
     /// Opens the Settings window at launch (used to verify it opens).
     static let debugSettings = CommandLine.arguments.contains("--debug-settings")
 }

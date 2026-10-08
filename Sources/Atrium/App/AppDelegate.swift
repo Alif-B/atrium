@@ -73,7 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             permissions = PermissionMonitor(store: store)
             badgeMonitor = BadgeMonitor(store: store, prefs: prefs, snapper: snapper)
-            hibernation = HibernationMonitor(store: store, closeWebApp: { app in webApps.closeWindow(app) })
+            hibernation = HibernationMonitor(store: store, closeWebApp: { app in webApps.closeWindow(app) },
+                                             idleLimit: LaunchOptions.debugHibernateSeconds.map(TimeInterval.init) ?? Hibernation.idleLimit)
             workspace = WorkspaceMonitor(
                 store: store, prefs: prefs, switcher: switcher,
                 onManagedActivated: { [weak self] id in self?.managedAppActivated(id) },
@@ -150,12 +151,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try? await Task.sleep(for: .milliseconds(400))      // let the window and monitors settle
             // Native apps in parallel (each may wait for its window), then web apps one by one.
             var jobs: [Task<Void, Never>] = []
-            // Apps set to hibernate aren't started at launch: they start when first clicked.
-            for app in store.apps where !app.isWebApp && app.snapWindow && !app.hibernates {
+            // Apps set to hibernate aren't started at launch (they start when first clicked), but if one is already
+            // running it is placed like any other, so it stays under Atrium's control and can go to sleep later.
+            for app in store.apps where !app.isWebApp && app.snapWindow {
                 guard let url = store.resolvedURL(for: app) else { continue }
                 let id = app.bundleIdentifier
+                let hibernates = app.hibernates
                 jobs.append(Task { @MainActor in
                     var running = Launcher.runningApp(bundleID: id)
+                    if running == nil && hibernates { return }
                     let launching = running == nil
                     if launching { running = try? await Launcher.open(url, activate: false) }
                     guard let pid = running?.processIdentifier else { return }

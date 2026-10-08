@@ -63,13 +63,15 @@ final class WebAppManager {
 
     /// Startup: find (or create) every web app's window and place it quietly behind, so clicks are instant later.
     func preload(_ apps: [ManagedApp]) async {
-        for app in apps where app.isWebApp && !app.hibernates {
-            _ = await ensureWindow(for: app, activate: false)
+        // A hibernating web app isn't opened at launch, but if its window is still open (Atrium restarted) it is
+        // re-attached: otherwise it would sit outside Atrium, never counted as open and so never put to sleep.
+        for app in apps where app.isWebApp {
+            _ = await ensureWindow(for: app, activate: false, create: !app.hibernates)
         }
     }
 
     /// Returns the web app's window, placing it in Atrium if it had to be found or created.
-    private func ensureWindow(for app: ManagedApp, activate: Bool) async -> (pid_t, AXUIElement)? {
+    private func ensureWindow(for app: ManagedApp, activate: Bool, create: Bool = true) async -> (pid_t, AXUIElement)? {
         let id = app.bundleIdentifier
         guard let site = app.webURL.flatMap(URL.init(string:)), let browserID = app.browserBundleID,
               let browserURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browserID) else { return nil }
@@ -94,6 +96,7 @@ final class WebAppManager {
         }
 
         // 3. Ask the browser for a new app-mode window and spot it by its (new, highest) window number.
+        guard create else { return nil }
         store.launchingBundleIDs.insert(id)
         defer { store.launchingBundleIDs.remove(id) }
         let existing = Launcher.runningApp(bundleID: browserID)
@@ -299,11 +302,25 @@ final class WebAppManager {
         }
     }
 
-    func closeWindow(_ app: ManagedApp) {
-        guard let window = snapper.placedWindow(app.bundleIdentifier) else { return }
+    /// Closes the web app's window (its Edge window, so the page stops running). Returns whether it was closed.
+    @discardableResult
+    func closeWindow(_ app: ManagedApp) -> Bool {
+        let id = app.bundleIdentifier
+        guard let window = snapper.placedWindow(id) else { return false }
+        var closed = false
         if let button = AX.element(window, kAXCloseButtonAttribute) {
-            AXUIElementPerformAction(button, kAXPressAction as CFString)
+            closed = AXUIElementPerformAction(button, kAXPressAction as CFString) == .success
         }
+        if closed {
+            snapper.forget(id)                                  // the window is gone: stop tracking it
+            store.runningBundleIDs.remove(id)
+            var numbers = savedNumbers
+            numbers[id] = nil
+            savedNumbers = numbers
+        } else {
+            log.error("couldn't close the window of \(id, privacy: .public)")
+        }
+        return closed
     }
 
     func minimize(_ app: ManagedApp) {

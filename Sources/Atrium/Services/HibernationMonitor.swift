@@ -10,16 +10,19 @@ private let log = Logger(subsystem: "com.alif.atrium", category: "hibernation")
 @MainActor
 final class HibernationMonitor {
     private let store: AppStore
-    private let closeWebApp: @MainActor (ManagedApp) -> Void
+    private let closeWebApp: @MainActor (ManagedApp) -> Bool
+    private let idleLimit: TimeInterval
     private var lastUsed: [String: TimeInterval] = [:]
     private var task: Task<Void, Never>?
 
-    init(store: AppStore, closeWebApp: @escaping @MainActor (ManagedApp) -> Void) {
+    init(store: AppStore, closeWebApp: @escaping @MainActor (ManagedApp) -> Bool, idleLimit: TimeInterval = Hibernation.idleLimit) {
         self.store = store
         self.closeWebApp = closeWebApp
+        self.idleLimit = idleLimit
+        let interval = min(30, max(2, idleLimit / 6))             // check often enough to be on time
         task = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(30), tolerance: .seconds(5))
+                try? await Task.sleep(for: .seconds(interval), tolerance: .seconds(interval / 6))
                 self?.check()
             }
         }
@@ -38,13 +41,13 @@ final class HibernationMonitor {
             let id = app.bundleIdentifier
             guard app.hibernates, store.runningBundleIDs.contains(id) else { lastUsed[id] = nil; continue }
             if isInUse(app) || lastUsed[id] == nil { lastUsed[id] = now; continue }
-            guard let last = lastUsed[id], Hibernation.shouldHibernate(now: now, lastUsed: last) else { continue }
+            guard let last = lastUsed[id], Hibernation.shouldHibernate(now: now, lastUsed: last, limit: idleLimit) else { continue }
             log.notice("hibernating \(id, privacy: .public)")
             lastUsed[id] = nil
             if app.isWebApp {
-                closeWebApp(app)
-            } else {
-                Launcher.runningApp(bundleID: id)?.terminate()
+                if !closeWebApp(app) { lastUsed[id] = now }      // try again later rather than forget it
+            } else if let running = Launcher.runningApp(bundleID: id) {
+                running.terminate()                              // a normal Quit: the app may ask to save first
             }
         }
     }
