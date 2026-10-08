@@ -63,7 +63,10 @@ struct AppsSettingsView: View {
                 Toggle("Open at Login", isOn: Binding(
                     get: { app.openAtLogin },
                     set: { value in store.update(bundleID: app.bundleIdentifier) { $0.openAtLogin = value } }))
-                if app.isWebApp { Button("Edit…") { editWebApp(app) } }
+                Toggle("Hibernate When Unused", isOn: Binding(
+                    get: { app.hibernates },
+                    set: { value in store.update(bundleID: app.bundleIdentifier) { $0.hibernates = value } }))
+                Button("Edit…") { editWebApp(app) }
                 Divider()
                 Button("Remove from Sidebar", role: .destructive) { store.remove(bundleID: app.bundleIdentifier) }
             } label: {

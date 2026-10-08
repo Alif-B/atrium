@@ -15,7 +15,6 @@ enum DesignTokens {
     static let defaultWindowSize = CGSize(width: 1180, height: 760)
     static let iconSize: CGFloat = 40
     static let lensCornerRadius: CGFloat = 14
-    static let runningDotSize: CGFloat = 4
     static let badgeHeight: CGFloat = 16
     static let dotBadgeSize: CGFloat = 8
     static let utilitySymbolSize: CGFloat = 13

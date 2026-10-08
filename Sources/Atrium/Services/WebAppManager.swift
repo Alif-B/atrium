@@ -63,7 +63,7 @@ final class WebAppManager {
 
     /// Startup: find (or create) every web app's window and place it quietly behind, so clicks are instant later.
     func preload(_ apps: [ManagedApp]) async {
-        for app in apps where app.isWebApp {
+        for app in apps where app.isWebApp && !app.hibernates {
             _ = await ensureWindow(for: app, activate: false)
         }
     }

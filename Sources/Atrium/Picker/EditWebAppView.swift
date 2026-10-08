@@ -16,6 +16,7 @@ struct EditWebAppView: View {
     @State private var siteIconPath: String?        // a freshly fetched site icon, not saved yet
     @State private var working = false
     @State private var pasteNote: String?
+    @State private var hibernates: Bool
     private let original: ManagedApp
 
     init(store: AppStore, app: ManagedApp, onDone: @escaping @MainActor () -> Void) {
@@ -25,6 +26,7 @@ struct EditWebAppView: View {
         self.original = app
         _name = State(initialValue: app.displayName)
         _scale = State(initialValue: app.iconScale ?? SiteIconFetcher.defaultScale)
+        _hibernates = State(initialValue: app.hibernates)
         let source = app.iconSource.flatMap { NSImage(contentsOfFile: $0) }
         _sourceImage = State(initialValue: app.customIcon ? source : nil)
     }
@@ -66,6 +68,8 @@ struct EditWebAppView: View {
                     Text(site).font(.callout).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 }
             }
+
+            HibernationSection(isOn: $hibernates)
 
             HStack {
                 if working { ProgressView().controlSize(.small) }
@@ -158,12 +162,14 @@ struct EditWebAppView: View {
         }
 
         let finalIcon = icon, finalSource = source, finalScale = savedScale, finalCustom = isCustom
+        let newHibernates = hibernates
         store.update(bundleID: appID) {
             $0.displayName = newName
             $0.iconFile = finalIcon
             $0.iconSource = finalSource
             $0.iconScale = finalScale
             $0.customIcon = finalCustom
+            $0.hibernates = newHibernates
         }
         // Remove files this edit replaced.
         if let old = original.iconFile, old != finalIcon { try? FileManager.default.removeItem(atPath: old) }

@@ -131,7 +131,8 @@ struct SidebarView: View {
                         hide: { actions.hide(app) },
                         quit: { actions.quit(app) },
                         toggleSnap: { store.update(bundleID: app.bundleIdentifier) { $0.snapWindow.toggle() } },
-                        toggleOpenAtLogin: { store.update(bundleID: app.bundleIdentifier) { $0.openAtLogin.toggle() } }))
+                        toggleOpenAtLogin: { store.update(bundleID: app.bundleIdentifier) { $0.openAtLogin.toggle() } },
+                        toggleHibernate: { store.update(bundleID: app.bundleIdentifier) { $0.hibernates.toggle() } }))
                 .offset(y: draggingID == app.bundleIdentifier ? dragOffset(for: index, metrics: metrics) : 0)
                 .shadow(color: .black.opacity(draggingID == app.bundleIdentifier ? 0.28 : 0), radius: 9, y: 4)
                 .zIndex(draggingID == app.bundleIdentifier ? 1 : 0)

@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var workspace: WorkspaceMonitor?
     private var permissions: PermissionMonitor?
     private var badgeMonitor: BadgeMonitor?
+    private var hibernation: HibernationMonitor?
     private var orderCache: (slot: String, number: Int, at: Date)?
     private var webApps: WebAppManager?
     private var addAppsWindow: HostingWindowController?
@@ -71,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             permissions = PermissionMonitor(store: store)
             badgeMonitor = BadgeMonitor(store: store, prefs: prefs, snapper: snapper)
+            hibernation = HibernationMonitor(store: store, closeWebApp: { app in webApps.closeWindow(app) })
             workspace = WorkspaceMonitor(
                 store: store, prefs: prefs, switcher: switcher,
                 onManagedActivated: { [weak self] id in self?.managedAppActivated(id) },
@@ -143,7 +145,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try? await Task.sleep(for: .milliseconds(400))      // let the window and monitors settle
             // Native apps in parallel (each may wait for its window), then web apps one by one.
             var jobs: [Task<Void, Never>] = []
-            for app in store.apps where !app.isWebApp && app.snapWindow {
+            // Apps set to hibernate aren't started at launch: they start when first clicked.
+            for app in store.apps where !app.isWebApp && app.snapWindow && !app.hibernates {
                 guard let url = store.resolvedURL(for: app) else { continue }
                 let id = app.bundleIdentifier
                 jobs.append(Task { @MainActor in
@@ -238,9 +241,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showEditWebApp(_ app: ManagedApp) {
         editWebAppWindow?.dismiss()
-        let controller = HostingWindowController(
-            title: "Edit \(app.displayName)", size: NSSize(width: 440, height: 300), transparentTitlebar: false,
-            rootView: EditWebAppView(store: store, app: app, onDone: { [weak self] in self?.editWebAppWindow?.dismiss() }))
+        let done: @MainActor () -> Void = { [weak self] in self?.editWebAppWindow?.dismiss() }
+        let controller = app.isWebApp
+            ? HostingWindowController(title: "Edit \(app.displayName)", size: NSSize(width: 460, height: 420), transparentTitlebar: false,
+                                      rootView: EditWebAppView(store: store, app: app, onDone: done))
+            : HostingWindowController(title: "Edit \(app.displayName)", size: NSSize(width: 440, height: 240), transparentTitlebar: false,
+                                      rootView: EditAppView(store: store, app: app, onDone: done))
         editWebAppWindow = controller
         controller.present()
     }

@@ -64,21 +64,20 @@ struct LensFill: View {
     }
 }
 
-private struct PulsingDot: View {
-    let pulsing: Bool
+/// While an app is starting, its (still gray) icon breathes instead of showing a dot.
+private struct LaunchPulse: ViewModifier {
+    let isActive: Bool
     @State private var dim = false
-    var body: some View {
-        Circle()
-            .fill(Color.primary.opacity(0.6))
-            .frame(width: DesignTokens.runningDotSize, height: DesignTokens.runningDotSize)
-            .opacity(pulsing && dim ? 0.35 : 1)
+    func body(content: Content) -> some View {
+        content
+            .opacity(isActive && dim ? 0.35 : 1)
             .onAppear { restart() }
-            .onChange(of: pulsing) { restart() }
+            .onChange(of: isActive) { restart() }
     }
     private func restart() {
         dim = false
-        guard pulsing else { return }
-        withAnimation(.easeInOut(duration: 0.3).repeatForever(autoreverses: true)) { dim = true }
+        guard isActive else { return }
+        withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) { dim = true }
     }
 }
 
@@ -93,6 +92,7 @@ struct ItemMenuActions {
     var quit: () -> Void
     var toggleSnap: () -> Void
     var toggleOpenAtLogin: () -> Void
+    var toggleHibernate: () -> Void
 }
 
 struct SidebarItemView: View {
@@ -120,7 +120,11 @@ struct SidebarItemView: View {
                     .frame(width: metrics.iconSize, height: metrics.iconSize)
                     .scaleEffect(magnification)
                     .animation(Motion.magnify, value: magnification)
-                    .opacity(isMissing ? 0.4 : 1)
+                    // Not open = grayed out (no colour, dimmer); open = full colour. Replaces the old running dots.
+                    .saturation(isRunning ? 1 : 0)
+                    .opacity(isMissing ? 0.4 : (isRunning ? 1 : 0.55))
+                    .animation(Motion.fade, value: isRunning)
+                    .modifier(LaunchPulse(isActive: isLaunching && !isRunning))
                 if isMissing {
                     Image(systemName: "questionmark.circle.fill")
                         .font(.system(size: 12))
@@ -132,14 +136,6 @@ struct SidebarItemView: View {
             .contentShape(RoundedRectangle(cornerRadius: DesignTokens.lensCornerRadius, style: .continuous))
         }
         .buttonStyle(PressScaleStyle())
-        .overlay(alignment: edge == .left ? .leading : .trailing) {
-            if isRunning || isLaunching {
-                PulsingDot(pulsing: isLaunching && !isRunning)
-                    .offset(x: edge == .left ? -8 : 8)
-                    .transition(.opacity)
-            }
-        }
-        .animation(Motion.fade, value: isRunning)
         .overlay(alignment: .topTrailing) {
             if let badge {
                 BadgeView(badge: badge)
@@ -157,8 +153,9 @@ struct SidebarItemView: View {
                 if app.isWebApp && isRunning { Button("Reload Page", action: menu.reload); Divider() }
                 Toggle("Snap Window When Opened", isOn: Binding(get: { app.snapWindow }, set: { _ in menu.toggleSnap() }))
                 Toggle("Open at Login", isOn: Binding(get: { app.openAtLogin }, set: { _ in menu.toggleOpenAtLogin() }))
+                Toggle("Hibernate When Unused", isOn: Binding(get: { app.hibernates }, set: { _ in menu.toggleHibernate() }))
                 if !app.isWebApp { Button("Show in Finder", action: menu.showInFinder) }
-                if app.isWebApp { Button("Edit…", action: menu.edit) }
+                Button("Edit…", action: menu.edit)
                 Button("Remove from Sidebar", role: .destructive, action: menu.remove)
                 if isRunning {
                     Divider()
@@ -176,7 +173,7 @@ struct SidebarItemView: View {
     private var accessibilityValue: String {
         var parts: [String] = []
         if isActive { parts.append("active") }
-        if isRunning { parts.append("running") }
+        parts.append(isRunning ? "open" : "not open")
         if let badge {
             switch badge {
             case .count(let n): parts.append("\(n) unread")

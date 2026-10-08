@@ -16,6 +16,8 @@ public struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
     /// The picture the user chose (kept so its size can be changed later) and how large it sits in its space (0.4–1.0).
     public var iconSource: String?
     public var iconScale: Double?
+    /// Quit this app (or close its window, for a web app) after 15 minutes without use. Off unless the user turns it on.
+    public var hibernates: Bool
 
     public var isWebApp: Bool { webURL != nil }
     public static let webAppIDPrefix = "atrium.web."
@@ -24,7 +26,7 @@ public struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
         id: UUID = UUID(), bundleIdentifier: String, displayName: String, lastKnownPath: String,
         snapWindow: Bool = true, openAtLogin: Bool = false,
         webURL: String? = nil, browserBundleID: String? = nil, iconFile: String? = nil, customIcon: Bool = false,
-        iconSource: String? = nil, iconScale: Double? = nil
+        iconSource: String? = nil, iconScale: Double? = nil, hibernates: Bool = false
     ) {
         self.id = id
         self.bundleIdentifier = bundleIdentifier
@@ -38,6 +40,7 @@ public struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
         self.customIcon = customIcon
         self.iconSource = iconSource
         self.iconScale = iconScale
+        self.hibernates = hibernates
     }
 
     // Synthesized Codable ignores property defaults, so older JSON files need decodeIfPresent.
@@ -55,6 +58,7 @@ public struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
         customIcon = try c.decodeIfPresent(Bool.self, forKey: .customIcon) ?? false
         iconSource = try c.decodeIfPresent(String.self, forKey: .iconSource)
         iconScale = try c.decodeIfPresent(Double.self, forKey: .iconScale)
+        hibernates = try c.decodeIfPresent(Bool.self, forKey: .hibernates) ?? false
     }
 }
 

@@ -38,3 +38,11 @@ import Testing
     #expect(back.iconSource == "/tmp/src.png")
     #expect(back.iconScale == 0.65)
 }
+
+@Test func hibernationIsOffByDefaultAndRoundTrips() throws {
+    #expect(ManagedApp(bundleIdentifier: "a", displayName: "A", lastKnownPath: "/a").hibernates == false)
+    let old = try JSONDecoder().decode(ManagedApp.self, from: Data(#"{"bundleIdentifier":"a","displayName":"A","lastKnownPath":"/a"}"#.utf8))
+    #expect(old.hibernates == false)
+    let on = ManagedApp(bundleIdentifier: "b", displayName: "B", lastKnownPath: "/b", hibernates: true)
+    #expect(try JSONDecoder().decode(ManagedApp.self, from: JSONEncoder().encode(on)).hibernates)
+}
