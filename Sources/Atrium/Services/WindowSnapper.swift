@@ -13,7 +13,9 @@ final class WindowSnapper {
     private var snapped: [pid_t: AXUIElement] = [:]
     private var task: Task<Void, Never>?
     private var followTask: Task<Void, Never>?
-    private var lastFollow = Date.distantPast
+    private let liveMover = LiveMover()
+    /// Last size we asked the active window to take; while it stays the same, live moves send position only.
+    private var liveSize: [pid_t: CGSize] = [:]
     /// Called after a window was fitted, so Atrium can slot itself under it.
     var onSnapped: (@MainActor () -> Void)?
 
@@ -35,6 +37,7 @@ final class WindowSnapper {
 
     private func forget(_ pid: pid_t) {
         snapped[pid] = nil
+        liveSize[pid] = nil
         restoreTasks.removeValue(forKey: pid)?.cancel()
         if let g = guards.removeValue(forKey: pid) {
             Task { @MainActor in g.invalidate() }      // never tear down from inside its own callback
@@ -124,14 +127,17 @@ final class WindowSnapper {
         guard store.isAXTrusted, !snapped.isEmpty else { return }
         unfittable.removeAll()
         let activePID = store.activeBundleID.flatMap { Launcher.runningApp(bundleID: $0)?.processIdentifier }
-        if let activePID, let window = snapped[activePID], Date().timeIntervalSince(lastFollow) > 0.04 {
-            lastFollow = Date()
-            apply(window, app: AX.app(activePID))
+        if let activePID, let window = snapped[activePID] {
+            let target = axTarget()
+            let resize = liveSize[activePID] != target.size
+            liveSize[activePID] = target.size
+            liveMover.move(window, to: target, resize: resize)
         }
         followTask?.cancel()
         followTask = Task {
             try? await Task.sleep(for: .milliseconds(120))
             guard !Task.isCancelled else { return }
+            self.liveSize.removeAll()            // next drag re-sends size once, in case an app nudged it
             for (pid, window) in snapped {
                 if AX.frame(window) == nil { forget(pid); continue }          // window was closed
                 apply(window, app: AX.app(pid))

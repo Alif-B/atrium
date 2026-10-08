@@ -71,13 +71,13 @@ final class SidebarController {
     /// A borderless window dragged by its background doesn't reliably post move notifications, and while the user drags,
     /// AppKit runs the main thread in "event tracking" mode where plain timers and async tasks don't fire. A timer
     /// registered for the *common* run-loop modes keeps firing, so the snapped app can follow live. The check is just a
-    /// frame comparison (30 Hz), so it costs next to nothing.
+    /// frame comparison (60 Hz), so it costs next to nothing.
     private func startFrameWatcher() {
         lastWatchedFrame = window.frame
-        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkFrame() }
         }
-        timer.tolerance = 0.01
+        timer.tolerance = 0.004
         RunLoop.main.add(timer, forMode: .common)
         watchTimer = timer
     }
