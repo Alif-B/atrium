@@ -6,6 +6,10 @@ struct SidebarActions {
     var showAddApps: @MainActor () -> Void
     var showSettings: @MainActor () -> Void
     var locate: @MainActor (ManagedApp) -> Void
+    var showInFinder: @MainActor (ManagedApp) -> Void
+    var remove: @MainActor (ManagedApp) -> Void
+    var hide: @MainActor (ManagedApp) -> Void
+    var quit: @MainActor (ManagedApp) -> Void
 }
 
 private struct UtilityButton: View {
@@ -107,7 +111,16 @@ struct SidebarView: View {
                     isHovered: hover.target?.slot == .item(index),
                     badge: prefs.showBadges ? store.badges[app.bundleIdentifier] : nil,
                     edge: prefs.sidebarEdge,
-                    action: { actions.switchTo(app) })
+                    action: { actions.switchTo(app) },
+                    menu: ItemMenuActions(
+                        open: { actions.switchTo(app) },
+                        locate: { actions.locate(app) },
+                        showInFinder: { actions.showInFinder(app) },
+                        remove: { actions.remove(app) },
+                        hide: { actions.hide(app) },
+                        quit: { actions.quit(app) },
+                        toggleSnap: { store.update(bundleID: app.bundleIdentifier) { $0.snapWindow.toggle() } },
+                        toggleOpenAtLogin: { store.update(bundleID: app.bundleIdentifier) { $0.openAtLogin.toggle() } }))
                 .contextMenu { appMenu(app) }
             }
             UtilityButton(symbol: "plus", label: "Add App", isHovered: hover.target?.slot == .plus,

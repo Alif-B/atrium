@@ -10,6 +10,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var prefs: Preferences!
     private var store: AppStore!
     private var sidebar: SidebarController!
+    private var switcher: AppSwitcher!
+    private var workspace: WorkspaceMonitor?
+    private var permissions: PermissionMonitor?
     private var addAppsWindow: HostingWindowController?
     private var settingsWindow: SettingsWindowController?
 
@@ -21,9 +24,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switchTo: { [weak self] app in self?.handleClick(app) },
             showAddApps: { [weak self] in self?.showAddApps() },
             showSettings: { [weak self] in self?.showSettings() },
-            locate: { [weak self] app in self?.locate(app) })
+            locate: { [weak self] app in self?.locate(app) },
+            showInFinder: { [weak self] app in
+                if let url = self?.store.resolvedURL(for: app) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            },
+            remove: { [weak self] app in self?.store.remove(bundleID: app.bundleIdentifier) },
+            hide: { app in Launcher.runningApp(bundleID: app.bundleIdentifier)?.hide() },
+            quit: { app in Launcher.runningApp(bundleID: app.bundleIdentifier)?.terminate() })
         sidebar = SidebarController(store: store, prefs: prefs, actions: actions)
         sidebar.show()
+        if !LaunchOptions.demo {
+            switcher = AppSwitcher(store: store, prefs: prefs)
+            workspace = WorkspaceMonitor(store: store, prefs: prefs, switcher: switcher) { [weak self] _ in
+                self?.sidebar.show()          // a managed app came forward from elsewhere: keep Atrium's window with it
+            }
+            permissions = PermissionMonitor(store: store)
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -31,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Dock-icon click brings the main window back (it can be closed with ⌘W without quitting).
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         sidebar.show()
+        switcher?.bringLastActiveForward()
         return false
     }
 
@@ -38,9 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleClick(_ app: ManagedApp) {
         if store.isMissing(app) { locate(app); return }
-        // M2: demo behaviour only (lens moves). Real activation arrives in M3.
-        log.debug("switchTo \(app.bundleIdentifier, privacy: .public)")
-        store.activeBundleID = app.bundleIdentifier
+        if let switcher { switcher.switchTo(app) } else { store.activeBundleID = app.bundleIdentifier }   // demo: lens only
     }
 
     @objc private func openSettings() { showSettings() }

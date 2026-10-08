@@ -71,6 +71,17 @@ private struct PulsingDot: View {
     }
 }
 
+struct ItemMenuActions {
+    var open: () -> Void
+    var locate: () -> Void
+    var showInFinder: () -> Void
+    var remove: () -> Void
+    var hide: () -> Void
+    var quit: () -> Void
+    var toggleSnap: () -> Void
+    var toggleOpenAtLogin: () -> Void
+}
+
 struct SidebarItemView: View {
     let app: ManagedApp
     let icon: NSImage
@@ -83,6 +94,7 @@ struct SidebarItemView: View {
     let badge: BadgeText?
     let edge: SidebarEdge
     let action: () -> Void
+    let menu: ItemMenuActions
 
     var body: some View {
         Button(action: action) {
@@ -123,6 +135,23 @@ struct SidebarItemView: View {
             }
         }
         .animation(Motion.badgeIn, value: badge != nil)
+        .contextMenu {
+            if isMissing {
+                Button("Locate…", action: menu.locate)
+                Button("Remove from Sidebar", role: .destructive, action: menu.remove)
+            } else {
+                if !isRunning { Button("Open", action: menu.open); Divider() }
+                Toggle("Snap Window When Opened", isOn: Binding(get: { app.snapWindow }, set: { _ in menu.toggleSnap() }))
+                Toggle("Open at Login", isOn: Binding(get: { app.openAtLogin }, set: { _ in menu.toggleOpenAtLogin() }))
+                Button("Show in Finder", action: menu.showInFinder)
+                Button("Remove from Sidebar", role: .destructive, action: menu.remove)
+                if isRunning {
+                    Divider()
+                    Button("Hide", action: menu.hide)
+                    Button("Quit", action: menu.quit)
+                }
+            }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(app.displayName))
         .accessibilityValue(Text(accessibilityValue))
