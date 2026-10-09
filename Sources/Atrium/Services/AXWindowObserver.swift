@@ -7,17 +7,23 @@ final class AXWindowObserver {
     private var observer: AXObserver?
     private let element: AXUIElement
     private let notifications: [String]
-    private let handler: @MainActor (String) -> Void
+    private let handler: @MainActor (String, AXUIElement) -> Void
 
-    init?(pid: pid_t, element: AXUIElement, notifications: [String], handler: @escaping @MainActor (String) -> Void) {
+    convenience init?(pid: pid_t, element: AXUIElement, notifications: [String], handler: @escaping @MainActor (String) -> Void) {
+        self.init(pid: pid, element: element, notifications: notifications, elementHandler: { name, _ in handler(name) })
+    }
+
+    /// `elementHandler` also receives the element the notification is about (for window-created: the new window).
+    init?(pid: pid_t, element: AXUIElement, notifications: [String], elementHandler: @escaping @MainActor (String, AXUIElement) -> Void) {
         self.element = element
         self.notifications = notifications
-        self.handler = handler
-        let callback: AXObserverCallback = { _, _, notification, refcon in
+        self.handler = elementHandler
+        let callback: AXObserverCallback = { _, subject, notification, refcon in
             guard let refcon else { return }
             let name = notification as String
             let me = Unmanaged<AXWindowObserver>.fromOpaque(refcon).takeUnretainedValue()
-            MainActor.assumeIsolated { me.handler(name) }
+            nonisolated(unsafe) let subject = subject           // only touched on the main thread, right here
+            MainActor.assumeIsolated { me.handler(name, subject) }
         }
         var created: AXObserver?
         guard AXObserverCreate(pid, callback, &created) == .success, let created else { return nil }

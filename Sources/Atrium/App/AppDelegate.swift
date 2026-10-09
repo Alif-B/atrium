@@ -67,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.webApps = webApps
             switcher.openWebApp = { app in webApps.open(app) }
             webApps.onWebAppFocused = { [weak self] slot in self?.managedAppActivated(slot) }
+            webApps.onRaised = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
             snapper.onWindowGone = { [weak self] slot in
                 if slot.hasPrefix(ManagedApp.webAppIDPrefix) { self?.store.runningBundleIDs.remove(slot) }
                 if self?.store.activeBundleID == slot, slot.hasPrefix(ManagedApp.webAppIDPrefix) { self?.store.activeBundleID = nil }
@@ -129,8 +130,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         orderCache = (id, found.number, Date())
-        // Only touch the window order when Atrium is actually covering the app: an empty click costs one read, nothing more.
-        if found.atriumInFront { sidebar.placeMain(below: found.number) }
+        // Reorder only when needed: Atrium covering the app, or Atrium left behind other windows while the app is in
+        // front (you came back from another app). One read of the window order, nothing more, when all is well.
+        if found.atriumInFront || !found.atriumDirectlyBelow { sidebar.placeMain(below: found.number) }
     }
 
     /// Dock-icon click brings the main window back (it can be closed with ⌘W without quitting).
@@ -205,6 +207,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   let toIndex = store.apps.firstIndex(where: { $0.bundleIdentifier == ids[1] }) else { log.notice("diag: apps not found"); return }
             switcher.switchTo(from)
             try? await Task.sleep(for: .seconds(2))
+            if LaunchOptions.debugAway, let finder = Launcher.runningApp(bundleID: "com.apple.finder") {
+                AX.makeFrontmost(finder.processIdentifier)
+                log.notice("diag: switched away to Finder")
+                try? await Task.sleep(for: .seconds(2))
+            }
             let glass = sidebar.layout.glass
             let metrics = SidebarMetrics.fit(count: store.apps.count, glassHeight: glass.height)
             let top = metrics.itemsTop(count: store.apps.count, glassHeight: glass.height)
@@ -275,9 +282,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// rail visible next to it.
     private func managedAppActivated(_ id: String) {
         guard let app = store.apps.first(where: { $0.bundleIdentifier == id }) else { return }
-        sidebar.window.orderFrontRegardless()
+        // Bring Atrium back *directly under* the app (above whatever you were using), never on top of it: putting
+        // Atrium's window in front first and tucking it back afterwards is the flash that looks like a reload.
         if snapper?.isPlaced(id) == true || app.isWebApp || !prefs.snapOnSwitch || !app.snapWindow {
-            keepWorkspaceVisible()
+            keepWorkspaceVisible(fresh: true)
             return
         }
         guard let running = Launcher.runningApp(bundleID: id) else { return }

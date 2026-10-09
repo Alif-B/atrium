@@ -195,23 +195,38 @@ final class WindowSnapper {
 
     /// One read of the window order: the slot's window number, and whether `atrium` (Atrium's main window) is currently in
     /// FRONT of it, i.e. covering the app. Nil when the slot's window isn't on screen (minimized, hidden, another Space).
-    func order(of slot: String, against atrium: Int) -> (number: Int, atriumInFront: Bool)? {
+    func order(of slot: String, against atrium: Int) -> (number: Int, atriumInFront: Bool, atriumDirectlyBelow: Bool)? {
         guard let p = placed[slot] else { return nil }
         let target = AX.frame(p.window) ?? axTarget()
         let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
         var atriumIndex: Int?
+        var appMatch: (index: Int, number: Int)?
         for (index, w) in list.enumerated() {          // front to back
             guard let number = w[kCGWindowNumber as String] as? Int else { continue }
-            if number == atrium { atriumIndex = index; continue }
+            if number == atrium {
+                atriumIndex = index
+                if appMatch != nil { break }
+                continue
+            }
+            if appMatch != nil { continue }
             guard (w[kCGWindowOwnerPID as String] as? Int32) == p.pid, (w[kCGWindowLayer as String] as? Int) == 0,
                   let b = w[kCGWindowBounds as String] as? [String: Double] else { continue }
             let r = CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0)
             if abs(r.minX - target.minX) < 2, abs(r.minY - target.minY) < 2,
                abs(r.width - target.width) < 2, abs(r.height - target.height) < 2 {
-                return (number, atriumIndex != nil)          // Atrium was seen before (= in front of) the app's window
+                if atriumIndex != nil { return (number, true, false) }      // Atrium is in front of (covering) the app
+                appMatch = (index, number)
             }
         }
-        return nil
+        guard let appMatch else { return nil }
+        // Atrium right behind the app, with only Atrium's own windows (the rail) or none in between?
+        var directlyBelow = false
+        if let atriumIndex {
+            directlyBelow = list[(appMatch.index + 1)..<atriumIndex].allSatisfy {
+                ($0[kCGWindowOwnerPID as String] as? Int32) == getpid() || ($0[kCGWindowLayer as String] as? Int) != 0
+            }
+        }
+        return (appMatch.number, false, directlyBelow)
     }
 
     func raise(slot: String) {

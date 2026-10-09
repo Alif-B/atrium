@@ -22,6 +22,8 @@ enum LaunchOptions {
     static let debugDrag = CommandLine.arguments.contains("--debug-drag")
     /// `--debug-hibernate-after=<seconds>`: use a short idle limit to test hibernation.
     static let debugHibernateSeconds: Int? = CommandLine.arguments.first { $0.hasPrefix("--debug-hibernate-after=") }.flatMap { Int($0.dropFirst(24)) }
+    /// With `--debug-click`: switch to Finder (another app) before clicking, as when coming back from elsewhere.
+    static let debugAway = CommandLine.arguments.contains("--debug-away")
     /// Opens the Settings window at launch (used to verify it opens).
     static let debugSettings = CommandLine.arguments.contains("--debug-settings")
 }

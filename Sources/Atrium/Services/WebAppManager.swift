@@ -34,6 +34,8 @@ final class WebAppManager {
 
     /// A web app's window came to the front (from any source); Atrium should come forward under it.
     var onWebAppFocused: (@MainActor (String) -> Void)?
+    /// A web app's window was just lifted: put Atrium right under it.
+    var onRaised: (@MainActor () -> Void)?
 
     init(store: AppStore, prefs: Preferences, snapper: WindowSnapper) {
         self.store = store
@@ -102,8 +104,30 @@ final class WebAppManager {
         let existing = Launcher.runningApp(bundleID: browserID)
         let before = Set(existing.map { windowBounds(pid: $0.processIdentifier).keys } ?? [:].keys)
 
+        // Edge ignores a requested position for app windows, so catch the window the instant it is created and move it
+        // into Atrium right away (instead of finding it up to 150 ms later, after it has already shown elsewhere).
+        var catcher: AXWindowObserver?
+        if store.isAXTrusted, let existing, prefs.snapOnSwitch, app.snapWindow {
+            let pid = existing.processIdentifier
+            let beforeWindows = axWindows(pid: pid)
+            let started = Date()
+            catcher = AXWindowObserver(pid: pid, element: AX.app(pid), notifications: [kAXWindowCreatedNotification]) {
+                [weak self] _, window in
+                guard let self, !beforeWindows.contains(where: { CFEqual($0, window) }), self.snapper.slot(for: window) == nil else { return }
+                AX.setFrame(window, app: AX.app(pid), to: self.snapper.axTarget())
+                log.notice("placed a new web-app window \(Int(Date().timeIntervalSince(started) * 1000)) ms after asking")
+            }
+        }
+        defer { catcher?.invalidate() }
+
         let config = NSWorkspace.OpenConfiguration()
-        config.arguments = ["--app=\(site.absoluteString)"]
+        // Ask Edge to open the window exactly where Atrium places it, so it never appears somewhere else first.
+        let target = snapper.axTarget()
+        config.arguments = [
+            "--app=\(site.absoluteString)",
+            "--window-position=\(Int(target.minX)),\(Int(target.minY))",
+            "--window-size=\(Int(target.width)),\(Int(target.height))",
+        ]
         // A running Chromium ignores arguments passed to an activation, so start a second instance: it hands the
         // request to the running browser (its process singleton) and exits.
         config.createsNewApplicationInstance = existing != nil
@@ -128,7 +152,8 @@ final class WebAppManager {
             guard let window = axWindows(pid: pid).first(where: { w in
                 snapper.slot(for: w) == nil && AX.frame(w).map { close($0, frame) } == true
             }) else { continue }
-            log.notice("web app \(id, privacy: .public) got window \(number)")
+            let t = snapper.axTarget()
+            log.notice("web app \(id, privacy: .public) got window \(number), first seen at \(NSStringFromRect(frame), privacy: .public); target \(NSStringFromRect(t), privacy: .public)")
             await adopt(window, number: number, pid: pid, slot: id, site: site)
             return (pid, window)
         }
@@ -153,6 +178,7 @@ final class WebAppManager {
     private func bringForward(_ window: AXUIElement, browser: NSRunningApplication, slot: String) async {
         store.activeBundleID = slot
         AX.raise(window)
+        onRaised?()                                       // Atrium straight under it, before the browser takes focus
         AX.makeFrontmost(browser.processIdentifier)
         if NSApp.isActive { NSApp.yieldActivation(to: browser) }
         browser.activate()
