@@ -53,7 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if app.isWebApp { self?.webApps?.minimize(app) } else { Launcher.runningApp(bundleID: app.bundleIdentifier)?.hide() }
             },
             quit: { [weak self] app in
-                if app.isWebApp { self?.webApps?.closeWindow(app) } else { Launcher.runningApp(bundleID: app.bundleIdentifier)?.terminate() }
+                if app.isWebApp { Task { await self?.webApps?.closeWindow(app) } } else { Launcher.runningApp(bundleID: app.bundleIdentifier)?.terminate() }
             },
             reload: { [weak self] app in self?.webApps?.reload(app) },
             edit: { [weak self] app in self?.showEditWebApp(app) })
@@ -74,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             permissions = PermissionMonitor(store: store)
             badgeMonitor = BadgeMonitor(store: store, prefs: prefs, snapper: snapper)
-            hibernation = HibernationMonitor(store: store, closeWebApp: { app in webApps.closeWindow(app) },
+            hibernation = HibernationMonitor(store: store, closeWebApp: { app in await webApps.closeWindow(app) },
                                              idleLimit: LaunchOptions.debugHibernateSeconds.map(TimeInterval.init) ?? Hibernation.idleLimit)
             workspace = WorkspaceMonitor(
                 store: store, prefs: prefs, switcher: switcher,

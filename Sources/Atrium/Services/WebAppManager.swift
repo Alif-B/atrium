@@ -97,6 +97,15 @@ final class WebAppManager {
             }
         }
 
+        // 2b. An app-mode window for this site that Atrium lost track of (e.g. a close the page refused, or an older
+        //     session): adopt it rather than open a duplicate.
+        if store.isAXTrusted, let browser = Launcher.runningApp(bundleID: browserID),
+           let (window, number) = await findUntrackedWindow(for: app, site: site, pid: browser.processIdentifier) {
+            log.notice("adopted an already-open window \(number) for \(id, privacy: .public)")
+            await adopt(window, number: number, pid: browser.processIdentifier, slot: id, site: site)
+            return (browser.processIdentifier, window)
+        }
+
         // 3. Ask the browser for a new app-mode window and spot it by its (new, highest) window number.
         guard create else { return nil }
         store.launchingBundleIDs.insert(id)
@@ -219,10 +228,10 @@ final class WebAppManager {
 
     /// Finds the Accessibility element for a window number. Several web-app windows can be stacked on exactly the same
     /// rectangle, so when bounds alone are ambiguous, nudge each candidate by one point and see which number moved.
-    private func resolveWindow(number: Int, pid: pid_t) async -> AXUIElement? {
+    private func resolveWindow(number: Int, pid: pid_t, allowTracked: Bool = false) async -> AXUIElement? {
         guard let frame = windowBounds(pid: pid)[number] else { return nil }
         let candidates = axWindows(pid: pid).filter { w in
-            snapper.slot(for: w) == nil && AX.frame(w).map { close($0, frame) } == true
+            (allowTracked || snapper.slot(for: w) == nil) && AX.frame(w).map { close($0, frame) } == true
         }
         if candidates.count <= 1 { return candidates.first }
         for w in candidates {
@@ -328,25 +337,79 @@ final class WebAppManager {
         }
     }
 
-    /// Closes the web app's window (its Edge window, so the page stops running). Returns whether it was closed.
+    /// Closes the web app's window (its Edge window, so the page stops running) and checks that it really closed.
+    /// A page can refuse ("Leave site?"); then the window stays tracked instead of being lost, and false is returned.
     @discardableResult
-    func closeWindow(_ app: ManagedApp) -> Bool {
+    func closeWindow(_ app: ManagedApp) async -> Bool {
         let id = app.bundleIdentifier
-        guard let window = snapper.placedWindow(id) else { return false }
-        var closed = false
-        if let button = AX.element(window, kAXCloseButtonAttribute) {
-            closed = AXUIElementPerformAction(button, kAXPressAction as CFString) == .success
+        guard let window = snapper.placedWindow(id), let browserID = app.browserBundleID,
+              let browser = Launcher.runningApp(bundleID: browserID) else { return false }
+        let pid = browser.processIdentifier
+        // Make sure this element really is the window we recorded (several can be stacked on the same spot).
+        var target = window
+        if let number = savedNumbers[id], await !isElement(window, number: number, pid: pid) {
+            log.error("\(id, privacy: .public): tracked element isn't window \(number); looking it up again")
+            guard let found = await resolveWindow(number: number, pid: pid, allowTracked: true) else { return false }
+            target = found
         }
-        if closed {
-            snapper.forget(id)                                  // the window is gone: stop tracking it
-            store.runningBundleIDs.remove(id)
-            var numbers = savedNumbers
-            numbers[id] = nil
-            savedNumbers = numbers
-        } else {
-            log.error("couldn't close the window of \(id, privacy: .public)")
+        guard let button = AX.element(target, kAXCloseButtonAttribute),
+              AXUIElementPerformAction(button, kAXPressAction as CFString) == .success else {
+            log.error("couldn't press close on \(id, privacy: .public)")
+            return false
         }
-        return closed
+        // Did it actually go away?
+        let number = savedNumbers[id]
+        for _ in 0..<15 {
+            try? await Task.sleep(for: .milliseconds(150))
+            let stillThere = number.map { windowBounds(pid: pid)[$0] != nil } ?? (AX.frame(target) != nil)
+            if !stillThere {
+                snapper.forget(id)
+                store.runningBundleIDs.remove(id)
+                var numbers = savedNumbers
+                numbers[id] = nil
+                savedNumbers = numbers
+                return true
+            }
+        }
+        log.notice("\(id, privacy: .public) kept its window open (the page may be asking to stay); still tracking it")
+        return false
+    }
+
+    /// An untracked app-mode window (no "Microsoft Edge" in its title, unlike normal browser windows) whose title names
+    /// this web app, with its window number.
+    private func findUntrackedWindow(for app: ManagedApp, site: URL, pid: pid_t) async -> (AXUIElement, Int)? {
+        let keywords = [app.displayName, WebAddress.suggestedName(for: site)]
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { $0.count >= 3 }
+        guard !keywords.isEmpty else { return nil }
+        let bounds = windowBounds(pid: pid)
+        let claimed = Set(savedNumbers.values)
+        for window in axWindows(pid: pid) where snapper.slot(for: window) == nil {
+            guard let title = AX.string(window, kAXTitleAttribute), !title.contains("Microsoft"),
+                  keywords.contains(where: { title.localizedCaseInsensitiveContains($0) }),
+                  let frame = AX.frame(window) else { continue }
+            let numbers = bounds.filter { close($0.value, frame) && !claimed.contains($0.key) }.map(\.key)
+            for number in numbers.sorted() {
+                if numbers.count == 1 { return (window, number) }
+                if await isElement(window, number: number, pid: pid) { return (window, number) }
+            }
+        }
+        return nil
+    }
+
+    /// Whether `element` is the window with this number: nudge it by a point and see which number moved.
+    private func isElement(_ element: AXUIElement, number: Int, pid: pid_t) async -> Bool {
+        guard let before = windowBounds(pid: pid)[number], let f = AX.frame(element) else { return false }
+        if windowBounds(pid: pid).values.filter({ close($0, before) }).count == 1 { return close(f, before) }   // unambiguous
+        var nudged = CGPoint(x: f.minX, y: f.minY + 1), original = f.origin
+        guard let moved = AXValueCreate(.cgPoint, &nudged), let back = AXValueCreate(.cgPoint, &original) else { return false }
+        AX.set(element, kAXPositionAttribute, moved)
+        var hit = false
+        for _ in 0..<6 {
+            try? await Task.sleep(for: .milliseconds(25))
+            if let b = windowBounds(pid: pid)[number], abs(b.minY - nudged.y) < 0.5 { hit = true; break }
+        }
+        AX.set(element, kAXPositionAttribute, back)
+        return hit
     }
 
     func minimize(_ app: ManagedApp) {

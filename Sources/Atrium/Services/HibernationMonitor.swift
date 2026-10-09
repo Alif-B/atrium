@@ -10,12 +10,12 @@ private let log = Logger(subsystem: "com.alif.atrium", category: "hibernation")
 @MainActor
 final class HibernationMonitor {
     private let store: AppStore
-    private let closeWebApp: @MainActor (ManagedApp) -> Bool
+    private let closeWebApp: @MainActor (ManagedApp) async -> Bool
     private let idleLimit: TimeInterval
     private var lastUsed: [String: TimeInterval] = [:]
     private var task: Task<Void, Never>?
 
-    init(store: AppStore, closeWebApp: @escaping @MainActor (ManagedApp) -> Bool, idleLimit: TimeInterval = Hibernation.idleLimit) {
+    init(store: AppStore, closeWebApp: @escaping @MainActor (ManagedApp) async -> Bool, idleLimit: TimeInterval = Hibernation.idleLimit) {
         self.store = store
         self.closeWebApp = closeWebApp
         self.idleLimit = idleLimit
@@ -28,7 +28,11 @@ final class HibernationMonitor {
         }
     }
 
-    private func isInUse(_ app: ManagedApp) -> Bool {
+    /// In use = you're looking at it, or it is making sound / using the microphone (music, a call).
+    /// Web apps play through their browser, which can't say which window is playing: any sound from the browser keeps
+    /// all of its web apps awake.
+    private func isInUse(_ app: ManagedApp, audio: Set<String>) -> Bool {
+        if audio.contains(app.browserBundleID ?? app.bundleIdentifier) { return true }
         guard store.activeBundleID == app.bundleIdentifier else { return false }
         guard let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return false }
         let host = app.browserBundleID ?? app.bundleIdentifier          // a web app lives in its browser
@@ -37,15 +41,17 @@ final class HibernationMonitor {
 
     private func check() {
         let now = ProcessInfo.processInfo.systemUptime
+        guard store.apps.contains(where: { $0.hibernates }) else { return }
+        let audio = AudioActivity.appsUsingAudio()
         for app in store.apps {
             let id = app.bundleIdentifier
             guard app.hibernates, store.runningBundleIDs.contains(id) else { lastUsed[id] = nil; continue }
-            if isInUse(app) || lastUsed[id] == nil { lastUsed[id] = now; continue }
+            if isInUse(app, audio: audio) || lastUsed[id] == nil { lastUsed[id] = now; continue }
             guard let last = lastUsed[id], Hibernation.shouldHibernate(now: now, lastUsed: last, limit: idleLimit) else { continue }
             log.notice("hibernating \(id, privacy: .public)")
             lastUsed[id] = nil
             if app.isWebApp {
-                if !closeWebApp(app) { lastUsed[id] = now }      // try again later rather than forget it
+                Task { if await !closeWebApp(app) { lastUsed[id] = now } }      // still open: try again later
             } else if let running = Launcher.runningApp(bundleID: id) {
                 running.terminate()                              // a normal Quit: the app may ask to save first
             }
