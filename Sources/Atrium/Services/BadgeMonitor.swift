@@ -40,34 +40,30 @@ final class BadgeMonitor {
         primed = false
     }
 
+    /// Holds blinking title badges steady and decides when something is genuinely new (see BadgeTracker).
+    private var tracker = BadgeTracker()
+
     private func poll() {
         let dockBadges = dock.badges()
-        var next: [String: BadgeText] = [:]
+        var readings: [String: BadgeText?] = [:]
+        var titleBased: Set<String> = []
         for app in store.apps {
             let id = app.bundleIdentifier
             if app.isWebApp {
-                if let window = snapper.placedWindow(id), let title = AX.string(window, kAXTitleAttribute),
-                   let badge = TitleBadge.parse(title) { next[id] = badge }
-            } else if let raw = dockBadges[id], let badge = BadgeText.parse(raw) {
-                next[id] = badge
+                titleBased.insert(id)
+                readings[id] = snapper.placedWindow(id).flatMap { AX.string($0, kAXTitleAttribute) }.flatMap(TitleBadge.parse)
+            } else {
+                readings[id] = dockBadges[id].flatMap(BadgeText.parse)
             }
         }
-        let previous = store.badges
-        guard next != previous else { primed = true; return }
-
-        // Something is new when a count went up, or a badge appeared where there was none.
-        var arrived: [String] = []
-        for (id, badge) in next where primed && isNew(badge, over: previous[id]) && !isInView(id) { arrived.append(id) }
-        store.badges = next
+        let inView = Set(store.apps.map(\.bundleIdentifier).filter(isInView))
+        let result = tracker.update(now: ProcessInfo.processInfo.systemUptime, readings: readings, titleBased: titleBased,
+                                    shown: store.badges, inView: inView)
         primed = true
-        log.notice("badges now: \(next.map { "\($0.key)=\($0.value.display.isEmpty ? "dot" : $0.value.display)" }.sorted().joined(separator: ", "), privacy: .public) (dock saw \(dockBadges.count))")
-        if !arrived.isEmpty, prefs.playBadgeSound { playThrottled() }
-    }
-
-    private func isNew(_ badge: BadgeText, over old: BadgeText?) -> Bool {
-        guard let old else { return true }
-        if case .count(let n) = badge, case .count(let m) = old { return n > m }
-        return false
+        guard result.badges != store.badges else { return }
+        store.badges = result.badges
+        log.notice("badges now: \(result.badges.map { "\($0.key)=\($0.value.display.isEmpty ? "dot" : $0.value.display)" }.sorted().joined(separator: ", "), privacy: .public) (dock saw \(dockBadges.count))")
+        if result.newArrival, prefs.playBadgeSound { playThrottled() }
     }
 
     /// No sound for an app you're already looking at (it is in front, inside Atrium).
