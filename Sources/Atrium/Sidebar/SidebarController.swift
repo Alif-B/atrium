@@ -37,6 +37,11 @@ final class SidebarController {
     var onMoveEnded: (@MainActor () -> Void)?
     /// The pointer arrived on the rail (a good moment to refresh the app's snapshot, before any drag or click).
     var onPointerEnteredRail: (@MainActor () -> Void)?
+    /// Atrium is about to minimize / close, or was just shown again: its apps go and come with it.
+    var onWillMinimize: (@MainActor () -> Void)?
+    var onDidDeminiaturize: (@MainActor () -> Void)?
+    var onWillClose: (@MainActor () -> Void)?
+    var onShown: (@MainActor () -> Void)?
     private(set) var isMoving = false
     private var backdrop: WindowBackdropView?
 
@@ -64,6 +69,7 @@ final class SidebarController {
         glassView.autoresizingMask = [.width, .height]
         rail.contentView = glassView
         window.onDoubleClick = { [weak self] in self?.titleBarDoubleClick() }
+        window.onZoom = { [weak self] in self?.toggleZoom() }
         rail.atriumWindow = window
 
         hover.onTargetChange = { [weak self] target in self?.updateLabel(target) }
@@ -86,14 +92,23 @@ final class SidebarController {
             })
         }
         // The rail is its own window: hide and show it with the main window.
-        observers.append(center.addObserver(forName: NSWindow.didMiniaturizeNotification, object: window, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.rail.orderOut(nil) }
+        observers.append(center.addObserver(forName: NSWindow.willMiniaturizeNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.rail.orderOut(nil)
+                self?.onWillMinimize?()
+            }
         })
         observers.append(center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.rail.orderOut(nil) }
+            MainActor.assumeIsolated {
+                self?.rail.orderOut(nil)
+                self?.onWillClose?()
+            }
         })
         observers.append(center.addObserver(forName: NSWindow.didDeminiaturizeNotification, object: window, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.keepRailOnMain() }
+            MainActor.assumeIsolated {
+                self?.keepRailOnMain()
+                self?.onDidDeminiaturize?()
+            }
         })
         window.onMouseDown = { [weak self] in                              // a click on the backdrop raised the main window
             self?.watchFastNow()
@@ -229,10 +244,28 @@ final class SidebarController {
     }
 
     func show() {
+        let wasHidden = !window.isVisible
         window.makeKeyAndOrderFront(nil)
         relayout()
         keepRailOnMain()
+        if wasHidden { onShown?() }
     }
+
+    /// While Atrium opens your apps at launch: keep Atrium in front, its workspace covered.
+    func showLoading() {
+        let ws = layout.workspace.offsetBy(dx: -window.frame.minX, dy: -window.frame.minY)
+        backdrop?.showLoading(frame: ws)
+        window.orderFrontRegardless()
+        keepRailOnMain()
+    }
+
+    /// Keeps Atrium (and its cover) above windows that open while loading.
+    func stayInFront() {
+        window.orderFrontRegardless()
+        keepRailOnMain()
+    }
+
+    func hideLoading() { backdrop?.hideLoading() }
 
     /// Main window right below the app it shows, rail right above the main window (where it sits).
     func placeMain(below number: Int) {

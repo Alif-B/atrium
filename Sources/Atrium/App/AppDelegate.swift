@@ -18,6 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hibernation: HibernationMonitor?
     private let snapshotter = WindowSnapshotter()
     private var mover: MoveCoordinator?
+    private var workDone = false
+    private var appObservers: [NSObjectProtocol] = []
     private let crossfade = CrossfadePanel()
     private var orderCache: (slot: String, number: Int, at: Date)?
     private var webApps: WebAppManager?
@@ -94,6 +96,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             mover.onSettled = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
             sidebar.onMoveBegan = { mover.began() }
             sidebar.onMoveEnded = { mover.ended() }
+            sidebar.onWillMinimize = { mover.conceal(.minimized) }
+            sidebar.onDidDeminiaturize = { mover.reveal(.minimized) }
+            sidebar.onWillClose = { mover.conceal(.closed) }
+            sidebar.onShown = { mover.reveal(.closed) }
+            let center = NotificationCenter.default
+            appObservers.append(center.addObserver(forName: NSApplication.didHideNotification, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { mover.conceal(.appHidden) }
+            })
+            appObservers.append(center.addObserver(forName: NSApplication.didUnhideNotification, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { mover.reveal(.appHidden) }
+            })
             sidebar.onPointerEnteredRail = { [weak self] in self?.refreshSnapshot() }
             sidebar.onFrameChange = { [weak self] in
                 guard self?.mover?.isMoving != true else { return }   // apps are hidden while moving
@@ -108,7 +121,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switcher.onShown = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
             sidebar.onMainMouseDown = { [weak self] in self?.keepWorkspaceVisible(restoreLast: true, fresh: true) }
             snapper.onSnapped = { [weak self] in self?.keepWorkspaceVisible() }
-            if LaunchOptions.debugPark {
+            if LaunchOptions.debugPresence {
+                Task { @MainActor in
+                    preloadAll()
+                    try? await Task.sleep(for: .seconds(16))
+                    @MainActor func report(_ label: String) {
+                        guard let snapper = self.snapper else { return }
+                        let target = snapper.axTarget()
+                        var shown = 0, hidden = 0, inPlace = 0
+                        for pid in snapper.placedPIDs {
+                            if NSRunningApplication(processIdentifier: pid)?.isHidden == true { hidden += 1 } else { shown += 1 }
+                        }
+                        for app in self.store.apps {
+                            if let w = snapper.placedWindow(app.bundleIdentifier), let f = AX.frame(w),
+                               abs(f.minX - target.minX) < 2, abs(f.minY - target.minY) < 2 { inPlace += 1 }
+                        }
+                        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?"
+                        log.notice("diag presence \(label, privacy: .public): Atrium visible \(self.sidebar.window.isVisible); apps shown \(shown), hidden \(hidden); windows in place \(inPlace); front \(front, privacy: .public)")
+                    }
+                    report("start")
+                    self.sidebar.window.performMiniaturize(nil); try? await Task.sleep(for: .seconds(2)); report("minimized (⌘M)")
+                    self.sidebar.window.deminiaturize(nil); try? await Task.sleep(for: .seconds(2)); report("restored")
+                    self.sidebar.window.performClose(nil); try? await Task.sleep(for: .seconds(1.5)); report("closed (⌘W)")
+                    self.sidebar.show(); try? await Task.sleep(for: .seconds(1.5)); report("reopened")
+                    NSApp.hide(nil); try? await Task.sleep(for: .seconds(1.5)); report("Atrium hidden")
+                    NSApp.unhideWithoutActivation(); try? await Task.sleep(for: .seconds(1.5)); report("Atrium unhidden")
+                }
+            } else if LaunchOptions.debugPark {
                 Task { @MainActor in
                     preloadAll()
                     try? await Task.sleep(for: .seconds(16))
@@ -166,6 +205,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationWillTerminate(_ notification: Notification) { mover?.releaseAll() }
 
     /// Atrium's window and the snapped app's window overlap. Whenever Atrium is brought forward (a click, a drag, the Dock),
     /// put it back directly *under* the snapped app's window, so the app stays visible inside Atrium ("sticky").
@@ -230,10 +271,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Pull every sidebar app into Atrium at launch, so the first click on each one is instant:
     /// running apps are placed quietly behind, closed apps are launched in the background, web apps get (or re-find)
     /// their windows. Finally the last-used app comes to the front.
+    /// Calm startup: Atrium covers its workspace ("Opening your apps") and stays in front while every sidebar app is
+    /// placed out of sight (running apps behind Atrium, closed ones launched hidden, web apps found or opened), then
+    /// the last-used app is revealed in one go. Capped so a slow app never holds the reveal back.
     private func preloadAll() {
         guard store.isAXTrusted, let snapper, let webApps else { return }
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(400))      // let the window and monitors settle
+        sidebar.showLoading()
+        let keepInFront = Task { @MainActor in
+            while !Task.isCancelled {
+                self.sidebar.stayInFront()
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+        var launchedHidden: [NSRunningApplication] = []
+        let work = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))      // let the window and monitors settle
             // Native apps in parallel (each may wait for its window), then web apps one by one.
             var jobs: [Task<Void, Never>] = []
             // Apps set to hibernate aren't started at launch (they start when first clicked), but if one is already
@@ -246,7 +298,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     var running = Launcher.runningApp(bundleID: id)
                     if running == nil && hibernates { return }
                     let launching = running == nil
-                    if launching { running = try? await Launcher.open(url, activate: false) }
+                    if launching {
+                        running = try? await Launcher.open(url, activate: false, hide: true)   // starts out of sight
+                        if let running { launchedHidden.append(running) }
+                    }
                     guard let pid = running?.processIdentifier else { return }
                     await snapper.snapAndWait(slot: id, pid: pid, launching: launching, raise: false)
                 })
@@ -254,8 +309,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for job in jobs { await job.value }
             await webApps.preload(store.apps)
             await webApps.tidyUpDuplicates()
+        }
+        Task { @MainActor in
+            let started = Date()
+            while !workDone, Date().timeIntervalSince(started) < 14 {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            keepInFront.cancel()
+            for app in launchedHidden where app.isHidden { app.unhide() }
+            for pid in snapper.placedPIDs { if let app = NSRunningApplication(processIdentifier: pid), app.isHidden { app.unhide() } }
+            if prefs.restoreLastApp { switcher.bringLastActiveForward() }
+            try? await Task.sleep(for: .milliseconds(120))      // the app is up: lift the cover
+            sidebar.hideLoading()
+            keepWorkspaceVisible(fresh: true)
             log.notice("startup preload finished")
-            switcher.bringLastActiveForward()
+            // Screen Recording powers the smooth moving and switching. Ask once, now, never in the middle of an action.
+            if !WindowSnapshotter.hasPermission, !UserDefaults.standard.bool(forKey: "askedForScreenRecording") {
+                UserDefaults.standard.set(true, forKey: "askedForScreenRecording")
+                try? await Task.sleep(for: .seconds(1))
+                WindowSnapshotter.requestPermission()
+            }
+        }
+        Task { @MainActor in
+            await work.value
+            self.workDone = true
         }
     }
 

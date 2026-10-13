@@ -4,22 +4,26 @@ import OSLog
 
 private let log = Logger(subsystem: "com.alif.atrium", category: "move")
 
-/// Makes moving/resizing Atrium feel like moving one window:
+/// Makes Atrium and its apps behave like ONE window whenever Atrium moves, resizes, zooms, minimizes, closes or hides:
 ///  1. a still image of the current app is put inside Atrium (behind the real window, so nothing changes yet);
-///  2. the apps with windows in Atrium are hidden, revealing the image, which then moves with Atrium perfectly;
-///  3. on release, every window is moved to the new place *while still hidden*, the apps are shown again right there,
-///     and the image is removed once they are back.
-/// Without the Screen Recording permission there is no image: the area is simply empty during the move.
+///  2. the apps with windows in Atrium are hidden, revealing the image, which then goes wherever Atrium goes;
+///  3. when Atrium is back at rest (or shown again), every window is moved to the right place *while still hidden*,
+///     the apps are shown again right there, and the image is removed once they are back.
+/// Without the Screen Recording permission there is no image: the area is simply empty meanwhile.
 @MainActor
 final class MoveCoordinator {
+    enum Reason: Hashable { case moving, closed, minimized, appHidden }
+
     private let store: AppStore
     private let snapper: WindowSnapper
     private let sidebar: SidebarController
     private let snapshotter: WindowSnapshotter
+    private var reasons: Set<Reason> = []
     private var hiddenByUs: [NSRunningApplication] = []
     private var activeAtStart: String?
-    private var askedForPermission = false
-    private(set) var isMoving = false
+
+    /// Apps are hidden and Atrium is showing its image (or nothing): don't follow, reorder or react to activations.
+    var isMoving: Bool { !reasons.isEmpty }
     /// Called once everything is back in place (Atrium re-slots itself under the app).
     var onSettled: (@MainActor () -> Void)?
 
@@ -30,26 +34,34 @@ final class MoveCoordinator {
         self.snapshotter = snapshotter
     }
 
-    func began() {
-        guard !isMoving, store.isAXTrusted, snapper.hasPlacedWindows else { return }
-        isMoving = true
+    func began() { conceal(.moving) }
+
+    /// Atrium is quitting: never leave its apps hidden behind.
+    func releaseAll() {
+        for app in hiddenByUs { app.unhide() }
+        hiddenByUs = []
+        reasons.removeAll()
+        snapper.isSuspended = false
+    }
+    func ended() { reveal(.moving) }
+
+    func conceal(_ reason: Reason) {
+        let first = reasons.isEmpty
+        reasons.insert(reason)
+        guard first, store.isAXTrusted, snapper.hasPlacedWindows else { return }
         snapper.isSuspended = true
         activeAtStart = store.activeBundleID
-        if !WindowSnapshotter.hasPermission, !askedForPermission {
-            askedForPermission = true
-            WindowSnapshotter.requestPermission()
-        }
         if let id = activeAtStart, let number = snapper.windowNumber(slot: id),
            let image = snapshotter.image(forWindow: number, maxAge: 120) {
             sidebar.showSnapshot(image)
         }
         hiddenByUs = snapper.placedPIDs.compactMap { NSRunningApplication(processIdentifier: $0) }.filter { !$0.isHidden }
         for app in hiddenByUs { app.hide() }
-        log.debug("move began: hid \(self.hiddenByUs.count) apps")
+        log.debug("concealed (\(String(describing: reason), privacy: .public)): hid \(self.hiddenByUs.count) apps")
     }
 
-    func ended() {
-        guard isMoving else { return }
+    func reveal(_ reason: Reason) {
+        guard reasons.remove(reason) != nil, reasons.isEmpty else { return }
         snapper.placeAllNow()                                   // new place, while still hidden
         let active = activeAtStart.flatMap { snapper.pid(of: $0) }
         for app in hiddenByUs where app.processIdentifier != active { app.unhide() }
@@ -59,14 +71,18 @@ final class MoveCoordinator {
             AX.makeFrontmost(pid)
         }
         hiddenByUs = []
-        isMoving = false
         snapper.isSuspended = false
         onSettled?()
+        let activePID = active
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(160))           // the windows are back on screen by now
-            if !isMoving { sidebar.hideSnapshot() }
+            guard reasons.isEmpty else { return }
+            sidebar.hideSnapshot()
+            // Restoring Atrium's window (from the Dock, a minimize) activates Atrium itself, after we handed focus
+            // over: give it back to the app, so typing goes where you're looking.
+            if let activePID { AX.makeFrontmost(activePID) }
             onSettled?()
         }
-        log.debug("move ended")
+        log.debug("revealed (\(String(describing: reason), privacy: .public))")
     }
 }

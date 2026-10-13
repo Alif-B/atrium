@@ -24,6 +24,7 @@ final class AtriumWindow: NSPanel {
         minSize = NSSize(width: 520, height: 360)
         collectionBehavior = [.managed, .participatesInCycle]
         setFrameAutosaveName("AtriumMainWindow")
+        animationBehavior = .documentWindow            // the system's own open/close animation
     }
     override var canBecomeKey: Bool { true }       // borderless windows default to false
     override var canBecomeMain: Bool { true }
@@ -33,7 +34,15 @@ final class AtriumWindow: NSPanel {
     var onMouseDown: (@MainActor () -> Void)?
     /// A double-click on the window's own background (the margin around the app).
     var onDoubleClick: (@MainActor () -> Void)?
+    /// Window ▸ Zoom (the same as a double-click on empty space).
+    var onZoom: (@MainActor () -> Void)?
     static let log = Logger(subsystem: "com.alif.atrium", category: "window")
+
+    // A borderless window has no title-bar buttons, so AppKit's standard Close (⌘W), Minimize (⌘M) and Zoom would
+    // only beep. Do what the buttons would do.
+    override func performClose(_ sender: Any?) { close() }
+    override func performMiniaturize(_ sender: Any?) { miniaturize(sender) }
+    override func performZoom(_ sender: Any?) { onZoom?() }
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .leftMouseDown, event.clickCount == 2 { onDoubleClick?(); return }
@@ -90,6 +99,28 @@ final class WindowBackdropView: NSView {
     }
 
     private let snapshotView = NSView()
+    private var loadingView: NSView?
+
+    /// Covers the workspace (opaque, so nothing being placed behind it shows through) until `hideLoading`.
+    func showLoading(frame: CGRect) {
+        guard loadingView == nil else { return }
+        let view = NSHostingView(rootView: LoadingView())
+        view.frame = frame
+        view.autoresizingMask = [.width, .height]
+        addSubview(view)
+        loadingView = view
+    }
+
+    func hideLoading() {
+        guard let view = loadingView else { return }
+        loadingView = nil
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.25
+            view.animator().alphaValue = 0
+        } completionHandler: {
+            MainActor.assumeIsolated { view.removeFromSuperview() }
+        }
+    }
 
     /// Shows a still image of the app at `frame` (this view's coordinates), e.g. while the window moves.
     func showSnapshot(_ image: CGImage, frame: CGRect) {
