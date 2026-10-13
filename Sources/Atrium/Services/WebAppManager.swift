@@ -25,6 +25,10 @@ final class WebAppManager {
     private var opening: Set<String> = []
     private var promptedForAccessibility = false
     private var iconRefreshScheduled: Set<String> = []
+    /// The web app being brought forward, briefly: Edge focusing a *different* window meanwhile is put right.
+    private var bringing: (slot: String, window: AXUIElement, until: Date)?
+    /// A web app's window is being closed: Edge focusing its next window meanwhile is automatic, not a choice.
+    private var closingUntil = Date.distantPast
 
     /// slot → window number, persisted so Atrium can find the same windows again after a restart.
     private var savedNumbers: [String: Int] {
@@ -38,6 +42,7 @@ final class WebAppManager {
     var onRaised: (@MainActor () -> Void)?
     /// Just before the visible app changes (for the crossfade): the app that's leaving.
     var onWillSwitch: (@MainActor (_ from: String?) -> Void)?
+    var onOpening: (@MainActor (_ id: String, _ from: String?) -> Void)?
 
     init(store: AppStore, prefs: Preferences, snapper: WindowSnapper) {
         self.store = store
@@ -51,7 +56,9 @@ final class WebAppManager {
 
     func open(_ app: ManagedApp) {
         let id = app.bundleIdentifier
-        if store.activeBundleID != id, snapper.placedWindow(id) != nil { onWillSwitch?(store.activeBundleID) }
+        let previous = store.activeBundleID
+        if previous != id, snapper.placedWindow(id) != nil { onWillSwitch?(previous) }
+        if snapper.placedWindow(id) == nil { onOpening?(id, previous) }
         store.activeBundleID = id
         prefs.lastActiveBundleID = id
         guard !opening.contains(id) else { return }
@@ -143,8 +150,9 @@ final class WebAppManager {
         // A running Chromium ignores arguments passed to an activation, so start a second instance: it hands the
         // request to the running browser (its process singleton) and exits.
         config.createsNewApplicationInstance = existing != nil
-        config.activates = activate
-        if activate, NSApp.isActive, let existing { NSApp.yieldActivation(to: existing) }
+        // Never let Edge activate here: it would bring forward its last-used window (often another web app) before
+        // this one exists. Atrium's "Opening…" card shows meanwhile, and the new window is brought forward by Atrium.
+        config.activates = existing == nil && activate
         do {
             _ = try await NSWorkspace.shared.openApplication(at: browserURL, configuration: config)
             log.notice("asked \(browserID, privacy: .public) for an app window: \(site.absoluteString, privacy: .public)")
@@ -189,12 +197,28 @@ final class WebAppManager {
     /// Raise exactly this window and activate the browser *without* bringing its other windows along.
     private func bringForward(_ window: AXUIElement, browser: NSRunningApplication, slot: String) async {
         store.activeBundleID = slot
+        bringing = (slot, window, Date().addingTimeInterval(0.8))
         AX.raise(window)
+        AX.set(window, kAXFocusedAttribute, true as CFBoolean)
         onRaised?()                                       // Atrium straight under it, before the browser takes focus
         AX.makeFrontmost(browser.processIdentifier)
         if NSApp.isActive { NSApp.yieldActivation(to: browser) }
         browser.activate()
         watchFocus(of: browser.processIdentifier)
+        // Edge brings forward its *last focused* window when it activates, which can be another web app's. Make sure
+        // it's this one, right after activation and once more a moment later.
+        let pid = browser.processIdentifier
+        Task { @MainActor in
+            for delay in [60, 220] {
+                try? await Task.sleep(for: .milliseconds(delay))
+                guard store.activeBundleID == slot else { return }
+                let focused = AX.element(AX.app(pid), kAXFocusedWindowAttribute)
+                if focused.map({ !CFEqual($0, window) }) ?? true {
+                    AX.raise(window)
+                    AX.set(window, kAXFocusedAttribute, true as CFBoolean)
+                }
+            }
+        }
         let app = store.apps.first { $0.bundleIdentifier == slot }
         if prefs.snapOnSwitch, app?.snapWindow ?? true {
             await snapper.place(slot: slot, pid: browser.processIdentifier, window: window, raise: true)
@@ -290,6 +314,9 @@ final class WebAppManager {
 
     /// Called when the hosting browser becomes the active app: returns the web app whose window is focused, if any.
     func resolveFocusedSlot(browserBundleID: String) -> String? {
+        if let b = bringing, Date() < b.until { return b.slot }                  // mid-switch: the one being shown
+        if let card = store.emptyState, card.appID == store.activeBundleID { return card.appID }   // a card is up
+        if Date() < closingUntil { return store.activeBundleID }                 // mid-close: nothing changed by choice
         guard let browser = Launcher.runningApp(bundleID: browserBundleID) else { return nil }
         watchFocus(of: browser.processIdentifier)
         guard let focused = AX.element(AX.app(browser.processIdentifier), kAXFocusedWindowAttribute) else { return nil }
@@ -310,6 +337,16 @@ final class WebAppManager {
     private func focusChanged(pid: pid_t) {
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
               let focused = AX.element(AX.app(pid), kAXFocusedWindowAttribute) else { return }
+        if Date() < closingUntil { return }
+        // Mid-switch: Edge focusing some other window by itself is not a choice; put the intended one back on top.
+        if let b = bringing, Date() < b.until, !CFEqual(focused, b.window) {
+            AX.raise(b.window)
+            AX.set(b.window, kAXFocusedAttribute, true as CFBoolean)
+            return
+        }
+        // A card is up for the web app whose window just closed: the browser focusing its next window is automatic,
+        // not a choice; keep showing the card.
+        if let card = store.emptyState, card.appID == store.activeBundleID, snapper.slot(for: focused) != card.appID { return }
         if let slot = snapper.slot(for: focused) {
             if store.activeBundleID != slot {
                 store.activeBundleID = slot
@@ -386,8 +423,10 @@ final class WebAppManager {
             guard let found = await resolveWindow(number: number, pid: pid, allowTracked: true) else { return false }
             target = found
         }
+        closingUntil = Date().addingTimeInterval(1.5)
         guard let button = AX.element(target, kAXCloseButtonAttribute),
               AXUIElementPerformAction(button, kAXPressAction as CFString) == .success else {
+            closingUntil = .distantPast
             log.error("couldn't press close on \(id, privacy: .public)")
             return false
         }

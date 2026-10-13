@@ -49,6 +49,7 @@ final class HibernationMonitor {
             if isInUse(app, audio: audio) || lastUsed[id] == nil { lastUsed[id] = now; continue }
             guard let last = lastUsed[id], Hibernation.shouldHibernate(now: now, lastUsed: last, limit: idleLimit) else { continue }
             log.notice("hibernating \(id, privacy: .public)")
+            store.recentlyHibernated.insert(id)
             lastUsed[id] = nil
             if app.isWebApp {
                 Task { if await !closeWebApp(app) { lastUsed[id] = now } }      // still open: try again later

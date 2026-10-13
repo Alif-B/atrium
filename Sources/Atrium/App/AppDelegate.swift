@@ -74,8 +74,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             webApps.onWebAppFocused = { [weak self] slot in self?.managedAppActivated(slot) }
             webApps.onRaised = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
             snapper.onWindowGone = { [weak self] slot in
+                log.notice("window gone: \(slot, privacy: .public); active \(self?.store.activeBundleID ?? "none", privacy: .public)")
                 if slot.hasPrefix(ManagedApp.webAppIDPrefix) { self?.store.runningBundleIDs.remove(slot) }
-                if self?.store.activeBundleID == slot, slot.hasPrefix(ManagedApp.webAppIDPrefix) { self?.store.activeBundleID = nil }
+                if self?.store.activeBundleID == slot, slot.hasPrefix(ManagedApp.webAppIDPrefix) { self?.shownAppGone(slot) }
             }
             permissions = PermissionMonitor(store: store)
             badgeMonitor = BadgeMonitor(store: store, prefs: prefs, snapper: snapper)
@@ -120,8 +121,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sidebar.onCheckOrder = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
             switcher.onShown = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
             sidebar.onMainMouseDown = { [weak self] in self?.keepWorkspaceVisible(restoreLast: true, fresh: true) }
-            snapper.onSnapped = { [weak self] in self?.keepWorkspaceVisible() }
-            if LaunchOptions.debugPresence {
+            snapper.onSnapped = { [weak self] in
+                // The app's window arrived: the opening card goes away underneath it.
+                if let self, case .opening(let id)? = self.store.emptyState, self.snapper?.isPlaced(id) == true { self.store.emptyState = nil }
+                self?.keepWorkspaceVisible()
+            }
+            switcher.onOpening = { [weak self] id, from in self?.showOpening(id, from: from) }
+            workspace?.onShownAppGone = { [weak self] id in self?.shownAppGone(id) }
+            webApps.onOpening = { [weak self] id, from in self?.showOpening(id, from: from) }
+            if let id = LaunchOptions.debugEmpty {
+                Task { @MainActor in
+                    preloadAll()
+                    try? await Task.sleep(for: .seconds(16))
+                    guard let app = store.apps.first(where: { $0.bundleIdentifier == id }) else { return }
+                    @MainActor func report(_ label: String) {
+                        let ws = self.sidebar.workspaceRect
+                        let top = NSScreen.screens.first?.frame.maxY ?? 0
+                        let center = CGPoint(x: ws.midX, y: top - ws.midY)
+                        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+                        let owner = list.first { w in
+                            guard (w[kCGWindowLayer as String] as? Int) == 0, let b = w[kCGWindowBounds as String] as? [String: Double] else { return false }
+                            return CGRect(x: b["X"]!, y: b["Y"]!, width: b["Width"]!, height: b["Height"]!).contains(center) && (b["Width"] ?? 0) > 300
+                        }.flatMap { $0[kCGWindowOwnerName as String] as? String } ?? "none"
+                        log.notice("diag empty \(label, privacy: .public): card \(String(describing: self.store.emptyState), privacy: .public); in front: \(owner, privacy: .public)")
+                    }
+                    switcher.switchTo(app); try? await Task.sleep(for: .seconds(2)); report("shown")
+                    await webApps.closeWindow(app); try? await Task.sleep(for: .seconds(1.5)); report("window closed")
+                    switcher.switchTo(app); try? await Task.sleep(for: .milliseconds(60)); report("reopen clicked")
+                    try? await Task.sleep(for: .seconds(4)); report("a few seconds later")
+                }
+            } else if LaunchOptions.debugPresence {
                 Task { @MainActor in
                     preloadAll()
                     try? await Task.sleep(for: .seconds(16))
@@ -218,7 +247,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func keepWorkspaceVisible(restoreLast: Bool = false, fresh: Bool = false) {
         guard let snapper, mover?.isMoving != true else { return }
         var id = store.activeBundleID
-        if restoreLast, id.map({ !snapper.isPlaced($0) }) ?? true,
+        // (Not while a card is up: the selected app is opening, or just quit; that's what Atrium should be showing.)
+        if restoreLast, store.emptyState == nil, id.map({ !snapper.isPlaced($0) }) ?? true,
            let last = prefs.lastActiveBundleID, snapper.isPlaced(last) {
             id = last
             store.activeBundleID = last
@@ -247,6 +277,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: Smoothness
+
+    /// The app on show quit, crashed, hibernated or had its window closed: show its card in front, kindly.
+    private func shownAppGone(_ id: String) {
+        log.notice("shown app gone: \(id, privacy: .public)")
+        store.emptyState = store.recentlyHibernated.remove(id) != nil ? .asleep(id) : .quit(id)
+        sidebar.stayInFront()
+    }
+
+    /// The app has no window yet: fade from the previous app to Atrium's calm "Opening…" card, in front of it.
+    private func showOpening(_ id: String, from previous: String?) {
+        if previous != id { crossfadeAway(from: previous) }
+        store.emptyState = .opening(id)
+        sidebar.stayInFront()
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(25))
+            if store.emptyState == .opening(id) { store.emptyState = .failed(id) }
+        }
+    }
 
     /// Keep a recent still image of the app on show (used while moving and for the switch crossfade).
     private func refreshSnapshot() {

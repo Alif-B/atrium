@@ -15,6 +15,8 @@ final class WorkspaceMonitor {
     var slotResolver: (@MainActor (String) -> String?)?
     /// True while Atrium moves with its apps hidden: activation changes then are side effects, not choices.
     var isSuspended: (@MainActor () -> Bool)?
+    /// The app on show quit (or crashed).
+    var onShownAppGone: (@MainActor (String) -> Void)?
     private let onTerminated: @MainActor (pid_t) -> Void
 
     init(store: AppStore, prefs: Preferences, switcher: AppSwitcher, onManagedActivated: @escaping @MainActor (String) -> Void,
@@ -48,7 +50,7 @@ final class WorkspaceMonitor {
             self?.onTerminated(pid)
             // Only "not running" if no other instance of that app is still alive.
             guard Launcher.runningApp(bundleID: id) == nil else { return }
-            if self?.store.activeBundleID == id { self?.store.activeBundleID = nil }     // it quit: no lens on a closed app
+            if self?.store.activeBundleID == id { self?.onShownAppGone?(id) }   // the app on show is gone: say so, kindly
             self?.store.runningBundleIDs.remove(id)
             self?.store.launchingBundleIDs.remove(id)
             self?.store.badges[id] = nil
@@ -66,7 +68,9 @@ final class WorkspaceMonitor {
             return
         }
         guard store.apps.contains(where: { $0.bundleIdentifier == id }) else {
-            store.activeBundleID = nil                                        // some other app: the lens fades out
+            // Some other app. If Atrium is showing a card for the app that just went away, this is usually macOS
+            // activating "the next app" by itself: keep the card (and the lens) where they are.
+            if store.emptyState == nil { store.activeBundleID = nil }        // otherwise the lens fades out
             return
         }
         store.activeBundleID = id

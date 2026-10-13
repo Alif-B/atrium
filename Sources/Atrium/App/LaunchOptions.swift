@@ -30,6 +30,8 @@ enum LaunchOptions {
     static let debugPark = CommandLine.arguments.contains("--debug-park")
     /// `--debug-presence`: minimize/restore, close/reopen and hide/unhide Atrium; log where the apps are each time.
     static let debugPresence = CommandLine.arguments.contains("--debug-presence")
+    /// `--debug-empty=<web app id>`: show it, close its window, reopen it; log the card state and what's in front.
+    static let debugEmpty: String? = CommandLine.arguments.first { $0.hasPrefix("--debug-empty=") }.map { String($0.dropFirst(14)) }
     /// Opens the Settings window at launch (used to verify it opens).
     static let debugSettings = CommandLine.arguments.contains("--debug-settings")
 }

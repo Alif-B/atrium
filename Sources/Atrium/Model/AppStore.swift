@@ -9,7 +9,18 @@ private let log = Logger(subsystem: "com.alif.atrium", category: "store")
 final class AppStore {
     var apps: [ManagedApp]
     var runningBundleIDs: Set<String> = []
-    var activeBundleID: String?
+    var activeBundleID: String? {
+        didSet {
+            if let state = emptyState, state.appID != activeBundleID {
+                emptyState = nil                                                     // moved on
+                Logger(subsystem: "com.alif.atrium", category: "store").notice("card cleared: active is now \(self.activeBundleID ?? "none", privacy: .public)")
+            }
+        }
+    }
+    /// What Atrium's workspace shows while the selected app has no window (opening, quit, asleep).
+    var emptyState: EmptyState?
+    /// Apps just put to sleep by hibernation (so their exit reads "asleep", not "quit").
+    @ObservationIgnored var recentlyHibernated: Set<String> = []
     var launchingBundleIDs: Set<String> = []
     var badges: [String: BadgeText] = [:]
     var isAXTrusted = false

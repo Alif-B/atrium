@@ -99,6 +99,15 @@ final class WindowBackdropView: NSView {
     }
 
     private let snapshotView = NSView()
+    private var emptyStateView: NSView?
+
+    /// The card shown in the workspace when the selected app has no window (below the snapshot and loading cover).
+    func installEmptyState(_ view: NSView, frame: CGRect) {
+        view.frame = frame
+        view.autoresizingMask = [.width, .height]
+        addSubview(view, positioned: .below, relativeTo: snapshotView)
+        emptyStateView = view
+    }
     private var loadingView: NSView?
 
     /// Covers the workspace (opaque, so nothing being placed behind it shows through) until `hideLoading`.

@@ -132,6 +132,8 @@ final class SidebarController {
             }
         }
         relayout()
+        let ws = layout.workspace.offsetBy(dx: -window.frame.minX, dy: -window.frame.minY)
+        backdrop.installEmptyState(NSHostingView(rootView: EmptyStateView(store: store, open: actions.switchTo)), frame: ws)
         startFrameWatcher()
     }
 

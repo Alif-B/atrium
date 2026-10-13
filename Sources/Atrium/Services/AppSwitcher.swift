@@ -20,6 +20,8 @@ final class AppSwitcher {
     var onShown: (@MainActor () -> Void)?
     /// Just before the visible app changes (for the crossfade): the app that's leaving.
     var onWillSwitch: (@MainActor (_ from: String?) -> Void)?
+    /// The app has no window in Atrium yet (it's launching, or reopening one): show the opening card.
+    var onOpening: (@MainActor (_ id: String, _ from: String?) -> Void)?
 
     init(store: AppStore, prefs: Preferences, snapper: WindowSnapper) {
         self.store = store
@@ -32,7 +34,9 @@ final class AppSwitcher {
         guard let url = store.resolvedURL(for: app) else { return }
         let id = app.bundleIdentifier
         task?.cancel()
+        let previous = store.activeBundleID
         if bringForwardIfLoaded(app) { return }
+        onOpening?(id, previous)
         inFlightBundleID = id
         store.activeBundleID = id                       // the lens starts moving on this frame
         prefs.lastActiveBundleID = id
