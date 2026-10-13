@@ -95,7 +95,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switcher.onShown = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
             sidebar.onMainMouseDown = { [weak self] in self?.keepWorkspaceVisible(restoreLast: true, fresh: true) }
             snapper.onSnapped = { [weak self] in self?.keepWorkspaceVisible() }
-            if LaunchOptions.debugDrag { runDragDiagnostic() }
+            if LaunchOptions.debugDoubleClick {
+                Task { @MainActor in
+                    for round in 1...2 {
+                        try? await Task.sleep(for: .seconds(3))
+                        let glass = sidebar.layout.glass
+                        let top = NSScreen.screens.first?.frame.maxY ?? 0
+                        let p = CGPoint(x: glass.midX, y: top - (glass.minY + SidebarMetrics.bottomBlockHeight + DesignTokens.sidebarPadding + 12))
+                        log.notice("diag dblclick \(round): before \(NSStringFromRect(self.sidebar.window.frame), privacy: .public)")
+                        ClickDiagnostic.doubleClick(at: p)
+                        try? await Task.sleep(for: .seconds(1.5))
+                        log.notice("diag dblclick \(round): after \(NSStringFromRect(self.sidebar.window.frame), privacy: .public)")
+                    }
+                }
+            } else if LaunchOptions.debugDrag { runDragDiagnostic() }
             else if let spec = LaunchOptions.debugClick { runClickDiagnostic(spec) }
             else if let id = LaunchOptions.debugFollow { runFollowDiagnostic(bundleID: id) } else { preloadAll() }
             if LaunchOptions.debugSettings { showSettings() }

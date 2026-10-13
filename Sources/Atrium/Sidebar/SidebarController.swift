@@ -46,6 +46,7 @@ final class SidebarController {
         host.sizingOptions = []
         host.onHover = { [weak self] point in self?.pointerMoved(point) }
         host.isOverControl = { [hover] in hover.target != nil }
+        host.onDoubleClick = { [weak self] in self?.titleBarDoubleClick() }
 
         let backdrop = WindowBackdropView(frame: CGRect(origin: .zero, size: size))
         window.contentView = backdrop
@@ -53,6 +54,7 @@ final class SidebarController {
         glassView.contentView = host
         glassView.autoresizingMask = [.width, .height]
         rail.contentView = glassView
+        window.onDoubleClick = { [weak self] in self?.titleBarDoubleClick() }
         rail.atriumWindow = window
 
         hover.onTargetChange = { [weak self] target in self?.updateLabel(target) }
@@ -165,6 +167,40 @@ final class SidebarController {
     private func pointerMoved(_ point: CGPoint?) {
         let target = SidebarView.hitTest(point, glassHeight: glassView.frame.height, apps: store.apps)
         if target != hover.target { hover.target = target }
+    }
+
+    // MARK: Double-click to zoom
+
+    private var frameBeforeZoom: CGRect?
+
+    /// Like a title bar: does what System Settings ▸ Desktop & Dock ▸ "Double-click a window's title bar to" says
+    /// (fill the screen by default, or minimize, or nothing).
+    private func titleBarDoubleClick() {
+        let defaults = UserDefaults.standard
+        let action = defaults.string(forKey: "AppleActionOnDoubleClick")
+            ?? (defaults.bool(forKey: "AppleMiniaturizeOnDoubleClick") ? "Minimize" : "Maximize")
+        switch action {
+        case "Minimize": window.miniaturize(nil)
+        case "None": break
+        default: toggleZoom()
+        }
+    }
+
+    /// Fill the screen's usable area; the next double-click goes back to the previous size and place.
+    func toggleZoom() {
+        guard let screen = window.screen ?? NSScreen.main else { return }
+        let filled = screen.visibleFrame
+        let isFilled = abs(window.frame.minX - filled.minX) < 2 && abs(window.frame.minY - filled.minY) < 2
+            && abs(window.frame.width - filled.width) < 2 && abs(window.frame.height - filled.height) < 2
+        if isFilled, let previous = frameBeforeZoom {
+            frameBeforeZoom = nil
+            window.setFrame(previous, display: true, animate: true)
+        } else {
+            frameBeforeZoom = window.frame
+            window.setFrame(filled, display: true, animate: true)
+        }
+        lastFrameChange = Date()
+        frameChanged()
     }
 
     func show() {

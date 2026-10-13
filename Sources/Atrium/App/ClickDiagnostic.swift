@@ -28,6 +28,18 @@ enum ClickDiagnostic {
         }
     }
 
+    /// Posts a real double-click at `point` (Quartz coordinates).
+    static func doubleClick(at point: CGPoint) {
+        for state in [1, 2] as [Int64] {
+            for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+                let e = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)
+                e?.setIntegerValueField(.mouseEventClickState, value: state)
+                e?.post(tap: .cghidEventTap)
+                usleep(40_000)
+            }
+        }
+    }
+
     /// Posts a real drag (press, move in steps, release) starting at `from` (Quartz coordinates).
     static func drag(from: CGPoint, by dx: CGFloat, then done: @escaping @Sendable () -> Void) {
         DispatchQueue.global(qos: .userInteractive).async {

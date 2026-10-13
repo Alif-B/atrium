@@ -24,6 +24,8 @@ enum LaunchOptions {
     static let debugHibernateSeconds: Int? = CommandLine.arguments.first { $0.hasPrefix("--debug-hibernate-after=") }.flatMap { Int($0.dropFirst(24)) }
     /// With `--debug-click`: switch to Finder (another app) before clicking, as when coming back from elsewhere.
     static let debugAway = CommandLine.arguments.contains("--debug-away")
+    /// `--debug-dblclick`: double-click empty rail space twice (zoom, then restore) and log the window frame.
+    static let debugDoubleClick = CommandLine.arguments.contains("--debug-dblclick")
     /// Opens the Settings window at launch (used to verify it opens).
     static let debugSettings = CommandLine.arguments.contains("--debug-settings")
 }

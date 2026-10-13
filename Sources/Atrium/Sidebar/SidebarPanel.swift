@@ -31,9 +31,12 @@ final class AtriumWindow: NSPanel {
     /// Called right after a mouse-down was handled (a click, or the end of a window drag). A click on an already-key window
     /// still brings it to the front without any key/activation notification, so this is the reliable hook.
     var onMouseDown: (@MainActor () -> Void)?
+    /// A double-click on the window's own background (the margin around the app).
+    var onDoubleClick: (@MainActor () -> Void)?
     static let log = Logger(subsystem: "com.alif.atrium", category: "window")
 
     override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown, event.clickCount == 2 { onDoubleClick?(); return }
         super.sendEvent(event)
         if event.type == .leftMouseDown || event.type == .rightMouseDown { onMouseDown?() }
     }
@@ -90,12 +93,15 @@ final class SidebarHostingView<Content: View>: NSHostingView<Content> {
     var onHover: (@MainActor (CGPoint?) -> Void)?
     /// True while the pointer is over an icon or button: a press there is a click or an icon drag, never a window drag.
     var isOverControl: (@MainActor () -> Bool)?
+    /// A double-click on empty rail space.
+    var onDoubleClick: (@MainActor () -> Void)?
 
     override var mouseDownCanMoveWindow: Bool { false }
 
     /// A press on empty rail space drags the whole Atrium window (the rail's parent); on an icon it's a click or a reorder.
     override func mouseDown(with event: NSEvent) {
         if !(isOverControl?() ?? false), let main = (window as? RailPanel)?.atriumWindow {
+            if event.clickCount == 2 { onDoubleClick?(); return }
             main.performDrag(with: event)
             return
         }
