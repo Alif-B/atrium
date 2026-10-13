@@ -36,6 +36,8 @@ final class WebAppManager {
     var onWebAppFocused: (@MainActor (String) -> Void)?
     /// A web app's window was just lifted: put Atrium right under it.
     var onRaised: (@MainActor () -> Void)?
+    /// Just before the visible app changes (for the crossfade): the app that's leaving.
+    var onWillSwitch: (@MainActor (_ from: String?) -> Void)?
 
     init(store: AppStore, prefs: Preferences, snapper: WindowSnapper) {
         self.store = store
@@ -49,6 +51,7 @@ final class WebAppManager {
 
     func open(_ app: ManagedApp) {
         let id = app.bundleIdentifier
+        if store.activeBundleID != id, snapper.placedWindow(id) != nil { onWillSwitch?(store.activeBundleID) }
         store.activeBundleID = id
         prefs.lastActiveBundleID = id
         guard !opening.contains(id) else { return }
@@ -250,6 +253,37 @@ final class WebAppManager {
             if hit { return w }
         }
         return nil
+    }
+
+    // MARK: Tidying up
+
+    /// Closes leftover duplicates: untracked app-mode windows sitting in Atrium's area whose title names a web app that
+    /// already has its own (tracked) window. Skipped while the browser plays sound, since a leftover could be the one
+    /// playing music.
+    func tidyUpDuplicates() async {
+        for browserID in Set(store.apps.compactMap(\.browserBundleID)) {
+            guard let browser = Launcher.runningApp(bundleID: browserID) else { continue }
+            if AudioActivity.appsUsingAudio().contains(browserID) {
+                log.notice("tidy-up skipped: \(browserID, privacy: .public) is playing sound")
+                continue
+            }
+            let pid = browser.processIdentifier
+            let target = snapper.axTarget()
+            let tracked = store.apps.filter { $0.isWebApp && $0.browserBundleID == browserID && snapper.placedWindow($0.bundleIdentifier) != nil }
+            var closed = 0
+            for window in axWindows(pid: pid) where snapper.slot(for: window) == nil {
+                guard let title = AX.string(window, kAXTitleAttribute), !title.contains("Microsoft"),
+                      let frame = AX.frame(window), close(frame, target),
+                      tracked.contains(where: { app in
+                          let site = app.webURL.flatMap(URL.init(string:))
+                          return [app.displayName, site.map(WebAddress.suggestedName(for:)) ?? ""]
+                              .filter { $0.count >= 3 }.contains { title.localizedCaseInsensitiveContains($0) }
+                      }),
+                      let button = AX.element(window, kAXCloseButtonAttribute) else { continue }
+                if AXUIElementPerformAction(button, kAXPressAction as CFString) == .success { closed += 1 }
+            }
+            if closed > 0 { log.notice("tidied up \(closed) duplicate window(s) of \(browserID, privacy: .public)") }
+        }
     }
 
     // MARK: Which web app is in front?

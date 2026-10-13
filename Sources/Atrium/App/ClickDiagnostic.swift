@@ -28,6 +28,16 @@ enum ClickDiagnostic {
         }
     }
 
+    /// The largest on-screen normal window of a process (Quartz coordinates), if any.
+    static func bounds(ofPID pid: pid_t) -> CGRect? {
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        return list.compactMap { w -> CGRect? in
+            guard (w[kCGWindowOwnerPID as String] as? Int32) == pid, (w[kCGWindowLayer as String] as? Int) == 0,
+                  let b = w[kCGWindowBounds as String] as? [String: Double], (b["Width"] ?? 0) > 300 else { return nil }
+            return CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0)
+        }.max { $0.width * $0.height < $1.width * $1.height }
+    }
+
     /// Posts a real double-click at `point` (Quartz coordinates).
     static func doubleClick(at point: CGPoint) {
         for state in [1, 2] as [Int64] {

@@ -13,6 +13,8 @@ final class WorkspaceMonitor {
     private var observers: [NSObjectProtocol] = []
     /// For apps that host several sidebar items (a browser with web apps): which item is in front, if any.
     var slotResolver: (@MainActor (String) -> String?)?
+    /// True while Atrium moves with its apps hidden: activation changes then are side effects, not choices.
+    var isSuspended: (@MainActor () -> Bool)?
     private let onTerminated: @MainActor (pid_t) -> Void
 
     init(store: AppStore, prefs: Preferences, switcher: AppSwitcher, onManagedActivated: @escaping @MainActor (String) -> Void,
@@ -56,6 +58,7 @@ final class WorkspaceMonitor {
 
     private func handleActivate(_ id: String) {
         if id == Bundle.main.bundleIdentifier { return }                     // clicking Atrium's own window: leave state alone
+        if isSuspended?() == true { return }
         if let slot = slotResolver?(id) {                                    // a web app's browser window came forward
             store.activeBundleID = slot
             prefs.lastActiveBundleID = slot

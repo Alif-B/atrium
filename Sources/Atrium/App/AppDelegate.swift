@@ -16,6 +16,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var permissions: PermissionMonitor?
     private var badgeMonitor: BadgeMonitor?
     private var hibernation: HibernationMonitor?
+    private let snapshotter = WindowSnapshotter()
+    private var mover: MoveCoordinator?
+    private let crossfade = CrossfadePanel()
     private var orderCache: (slot: String, number: Int, at: Date)?
     private var webApps: WebAppManager?
     private var addAppsWindow: HostingWindowController?
@@ -86,16 +89,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             workspace?.slotResolver = { id in
                 webApps.hostsWebApps(id) ? webApps.resolveFocusedSlot(browserBundleID: id) : nil
             }
+            let mover = MoveCoordinator(store: store, snapper: snapper, sidebar: sidebar, snapshotter: snapshotter)
+            self.mover = mover
+            mover.onSettled = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
+            sidebar.onMoveBegan = { mover.began() }
+            sidebar.onMoveEnded = { mover.ended() }
+            sidebar.onPointerEnteredRail = { [weak self] in self?.refreshSnapshot() }
             sidebar.onFrameChange = { [weak self] in
+                guard self?.mover?.isMoving != true else { return }   // apps are hidden while moving
                 self?.snapper?.follow()
-                self?.keepWorkspaceVisible()          // a drag may have started with Atrium raised above the app
+                self?.keepWorkspaceVisible()
             }
+            workspace?.isSuspended = { mover.isMoving }
+            switcher.onWillSwitch = { [weak self] from in self?.crossfadeAway(from: from) }
+            webApps.onWillSwitch = { [weak self] from in self?.crossfadeAway(from: from) }
             sidebar.onBecameKey = { [weak self] in self?.keepWorkspaceVisible(restoreLast: true, fresh: true) }
             sidebar.onCheckOrder = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
             switcher.onShown = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
             sidebar.onMainMouseDown = { [weak self] in self?.keepWorkspaceVisible(restoreLast: true, fresh: true) }
             snapper.onSnapped = { [weak self] in self?.keepWorkspaceVisible() }
-            if LaunchOptions.debugDoubleClick {
+            if LaunchOptions.debugPark {
+                Task { @MainActor in
+                    preloadAll()
+                    try? await Task.sleep(for: .seconds(16))
+                    guard let snapper = self.snapper else { return }
+                    // Hide → move while hidden → unhide: where does the window first appear?
+                    if let window = snapper.placedWindow("com.tinyspeck.slackmacgap"), let slack = Launcher.runningApp(bundleID: "com.tinyspeck.slackmacgap") {
+                        let start = AX.frame(window) ?? .zero
+                        slack.hide()
+                        try? await Task.sleep(for: .milliseconds(250))
+                        let moved = CGPoint(x: start.minX + 120, y: start.minY)
+                        let ok = true
+                        AX.setFrame(window, app: AX.app(slack.processIdentifier), to: CGRect(origin: moved, size: start.size))
+                        let whileHidden = AX.frame(window).map(NSStringFromRect) ?? "unreadable"
+                        log.notice("diag hide: hidden=\(slack.isHidden) set ok=\(ok) frame while hidden \(whileHidden, privacy: .public)")
+                        let t0 = Date()
+                        slack.unhide()
+                        var seen: [String] = []
+                        for _ in 0..<12 {
+                            let b = ClickDiagnostic.bounds(ofPID: slack.processIdentifier)
+                            seen.append("\(Int(Date().timeIntervalSince(t0) * 1000))ms:\(b.map { "\(Int($0.minX))" } ?? "none")")
+                            try? await Task.sleep(for: .milliseconds(20))
+                        }
+                        log.notice("diag unhide (x over time; expected \(Int(moved.x))): \(seen.joined(separator: " "), privacy: .public)")
+                        AX.setFrame(window, app: AX.app(slack.processIdentifier), to: snapper.axTarget())
+                    }
+                    for app in store.apps where false {
+                        let id = app.bundleIdentifier
+                        guard let window = snapper.placedWindow(id), let pid = snapper.pid(of: id) else { continue }
+                        var far = CGPoint(x: 40000, y: 40000)
+                        if let v = AXValueCreate(.cgPoint, &far) { AX.set(window, kAXPositionAttribute, v) }
+                        try? await Task.sleep(for: .milliseconds(300))
+                        let landed = AX.frame(window).map(NSStringFromRect) ?? "?"
+                        log.notice("diag park \(app.displayName, privacy: .public) (pid \(pid)): asked (40000,40000), landed \(landed, privacy: .public)")
+                        AX.setFrame(window, app: AX.app(pid), to: snapper.axTarget())
+                    }
+                }
+            } else if LaunchOptions.debugDoubleClick {
                 Task { @MainActor in
                     for round in 1...2 {
                         try? await Task.sleep(for: .seconds(3))
@@ -125,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///   fall back to the workspace's last app instead of leaving Atrium's empty area on top of everything.
     /// - fresh: look the window up again rather than reuse a number found in the last second.
     func keepWorkspaceVisible(restoreLast: Bool = false, fresh: Bool = false) {
-        guard let snapper else { return }
+        guard let snapper, mover?.isMoving != true else { return }
         var id = store.activeBundleID
         if restoreLast, id.map({ !snapper.isPlaced($0) }) ?? true,
            let last = prefs.lastActiveBundleID, snapper.isPlaced(last) {
@@ -153,6 +203,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sidebar.show()
         switcher?.bringLastActiveForward()
         return false
+    }
+
+    // MARK: Smoothness
+
+    /// Keep a recent still image of the app on show (used while moving and for the switch crossfade).
+    private func refreshSnapshot() {
+        guard let snapper, let id = store.activeBundleID, let number = snapper.windowNumber(slot: id) else { return }
+        snapshotter.refresh(windowNumber: number)
+    }
+
+    /// Fade from the app that's leaving to the one coming in.
+    private func crossfadeAway(from slot: String?) {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              let slot, let snapper, let number = snapper.windowNumber(slot: slot),
+              let image = snapshotter.image(forWindow: number, maxAge: 20) else { return }
+        crossfade.play(image, frame: sidebar.workspaceRect)
+        Task { @MainActor in                                   // and take a fresh one of the new app
+            try? await Task.sleep(for: .milliseconds(600))
+            self.refreshSnapshot()
+        }
     }
 
     // MARK: Startup
@@ -183,6 +253,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             for job in jobs { await job.value }
             await webApps.preload(store.apps)
+            await webApps.tidyUpDuplicates()
             log.notice("startup preload finished")
             switcher.bringLastActiveForward()
         }
@@ -192,7 +263,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func runDragDiagnostic() {
         Task { @MainActor in
-            try? await Task.sleep(for: .seconds(3))
+            preloadAll()
+            try? await Task.sleep(for: .seconds(18))
             let glass = sidebar.layout.glass
             let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
             // Empty rail space: just above the hairline that separates the list from the gear.
@@ -205,6 +277,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let after = self.sidebar.window.frame
                     let railX = self.sidebar.railFrame.minX - after.minX
                     log.notice("diag drag: window moved by \(Int(after.minX - before.minX)) pt; rail sits \(Int(railX)) pt from the window's left edge (expected \(Int(DesignTokens.gap)))")
+                    try? await Task.sleep(for: .seconds(1))
+                    guard let snapper = self.snapper else { return }
+                    let target = snapper.axTarget()
+                    var inPlace = 0, total = 0, hidden = 0
+                    for app in self.store.apps {
+                        guard let w = snapper.placedWindow(app.bundleIdentifier), let pid = snapper.pid(of: app.bundleIdentifier) else { continue }
+                        total += 1
+                        if let f = AX.frame(w), abs(f.minX - target.minX) < 2, abs(f.minY - target.minY) < 2 { inPlace += 1 }
+                        if NSRunningApplication(processIdentifier: pid)?.isHidden == true { hidden += 1 }
+                    }
+                    let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?"
+                    log.notice("diag drag result: \(inPlace)/\(total) windows in the new place, \(hidden) still hidden, front app \(front, privacy: .public), active \(self.store.activeBundleID ?? "none", privacy: .public)")
                 }
             }
         }

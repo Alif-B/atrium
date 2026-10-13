@@ -43,7 +43,22 @@ struct GeneralSettingsView: View {
                         }
                     }
                 }
-                Text("Atrium uses Accessibility to place your apps' windows inside it and keep them there.")
+                LabeledContent("Screen Recording") {
+                    if WindowSnapshotter.hasPermission {
+                        Label("On", systemImage: "checkmark.circle.fill").foregroundStyle(Color(nsColor: .systemGreen))
+                    } else {
+                        HStack(spacing: 8) {
+                            Label("Off", systemImage: "exclamationmark.circle.fill").foregroundStyle(Color(nsColor: .systemOrange))
+                            Button("Open System Settings…") {
+                                WindowSnapshotter.requestPermission()
+                                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            }
+                        }
+                    }
+                }
+                Text("Atrium uses Accessibility to place your apps' windows inside it and keep them there, and Screen Recording only to show a still image of the current app while you move Atrium or switch apps. Nothing is saved or sent anywhere.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }

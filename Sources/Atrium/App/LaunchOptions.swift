@@ -26,6 +26,8 @@ enum LaunchOptions {
     static let debugAway = CommandLine.arguments.contains("--debug-away")
     /// `--debug-dblclick`: double-click empty rail space twice (zoom, then restore) and log the window frame.
     static let debugDoubleClick = CommandLine.arguments.contains("--debug-dblclick")
+    /// `--debug-park`: try moving every placed window far off-screen and back; log where macOS actually put each.
+    static let debugPark = CommandLine.arguments.contains("--debug-park")
     /// Opens the Settings window at launch (used to verify it opens).
     static let debugSettings = CommandLine.arguments.contains("--debug-settings")
 }

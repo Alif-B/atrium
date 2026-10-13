@@ -18,6 +18,8 @@ final class AppSwitcher {
     var openWebApp: (@MainActor (ManagedApp) -> Void)?
     /// After an app's window was brought forward: put Atrium back right under it.
     var onShown: (@MainActor () -> Void)?
+    /// Just before the visible app changes (for the crossfade): the app that's leaving.
+    var onWillSwitch: (@MainActor (_ from: String?) -> Void)?
 
     init(store: AppStore, prefs: Preferences, snapper: WindowSnapper) {
         self.store = store
@@ -51,6 +53,7 @@ final class AppSwitcher {
         let id = app.bundleIdentifier
         guard let running = Launcher.runningApp(bundleID: id), let window = snapper.placedWindow(id), AX.frame(window) != nil
         else { return false }
+        if store.activeBundleID != id { onWillSwitch?(store.activeBundleID) }
         store.activeBundleID = id
         prefs.lastActiveBundleID = id
         if AX.bool(window, kAXMinimizedAttribute) == true { AX.set(window, kAXMinimizedAttribute, false as CFBoolean) }

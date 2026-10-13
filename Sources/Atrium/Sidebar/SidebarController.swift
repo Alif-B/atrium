@@ -32,6 +32,13 @@ final class SidebarController {
     var onCheckOrder: (@MainActor () -> Void)?
     /// A click on the main window itself (the backdrop around the app).
     var onMainMouseDown: (@MainActor () -> Void)?
+    /// Atrium started / finished moving or resizing (a drag, an edge resize, a zoom).
+    var onMoveBegan: (@MainActor () -> Void)?
+    var onMoveEnded: (@MainActor () -> Void)?
+    /// The pointer arrived on the rail (a good moment to refresh the app's snapshot, before any drag or click).
+    var onPointerEnteredRail: (@MainActor () -> Void)?
+    private(set) var isMoving = false
+    private var backdrop: WindowBackdropView?
 
     init(store: AppStore, prefs: Preferences, actions: SidebarActions) {
         self.prefs = prefs
@@ -47,9 +54,11 @@ final class SidebarController {
         host.onHover = { [weak self] point in self?.pointerMoved(point) }
         host.isOverControl = { [hover] in hover.target != nil }
         host.onDoubleClick = { [weak self] in self?.titleBarDoubleClick() }
+        host.onPress = { [weak self] in self?.watchFastNow() }
 
         let backdrop = WindowBackdropView(frame: CGRect(origin: .zero, size: size))
         window.contentView = backdrop
+        self.backdrop = backdrop
         glassView.cornerRadius = DesignTokens.sidebarCornerRadius
         glassView.contentView = host
         glassView.autoresizingMask = [.width, .height]
@@ -87,6 +96,7 @@ final class SidebarController {
             MainActor.assumeIsolated { self?.keepRailOnMain() }
         })
         window.onMouseDown = { [weak self] in                              // a click on the backdrop raised the main window
+            self?.watchFastNow()
             self?.keepRailOnMain()
             self?.onMainMouseDown?()
         }
@@ -133,7 +143,16 @@ final class SidebarController {
     private func tick() {
         if window.frame != lastWatchedFrame {
             lastFrameChange = Date()
+            if !isMoving {
+                isMoving = true
+                onMoveBegan?()
+            }
             frameChanged()
+        }
+        // Done moving: nothing changed for a moment, no button held, not resizing.
+        if isMoving, Date().timeIntervalSince(lastFrameChange) > 0.15, NSEvent.pressedMouseButtons == 0, !window.inLiveResize {
+            isMoving = false
+            onMoveEnded?()
         }
         let busy = NSEvent.pressedMouseButtons != 0 || window.inLiveResize || Date().timeIntervalSince(lastFrameChange) < 0.5
         if busy != watchingFast { scheduleWatch(fast: busy) }
@@ -151,6 +170,11 @@ final class SidebarController {
         }
     }
 
+    /// A press on Atrium (it may become a drag or resize): watch the frame at full speed right away.
+    private func watchFastNow() {
+        if !watchingFast { scheduleWatch(fast: true) }
+    }
+
     private var orderCheckPending = false
     private func scheduleOrderCheck() {
         guard !orderCheckPending else { return }
@@ -166,6 +190,7 @@ final class SidebarController {
     /// Hit-test on every mouse move here, outside SwiftUI: the rail only redraws when the target actually changes.
     private func pointerMoved(_ point: CGPoint?) {
         let target = SidebarView.hitTest(point, glassHeight: glassView.frame.height, apps: store.apps)
+        if hover.target == nil, point != nil { onPointerEnteredRail?() }
         if target != hover.target { hover.target = target }
     }
 
@@ -221,6 +246,16 @@ final class SidebarController {
     }
 
     var railFrame: CGRect { rail.frame }
+
+    /// Shows a still image of the app in Atrium's workspace (behind the app's real window until that is hidden).
+    func showSnapshot(_ image: CGImage) {
+        let ws = layout.workspace.offsetBy(dx: -window.frame.minX, dy: -window.frame.minY)
+        let scale = window.backingScaleFactor
+        let size = CGSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
+        backdrop?.showSnapshot(image, frame: CGRect(x: ws.minX, y: ws.maxY - size.height, width: size.width, height: size.height))
+    }
+
+    func hideSnapshot() { backdrop?.hideSnapshot() }
 
     /// The rectangle (Cocoa screen coordinates) the active app's window should fill.
     var workspaceRect: CGRect { layout.workspace }

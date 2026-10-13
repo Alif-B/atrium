@@ -82,6 +82,29 @@ final class WindowBackdropView: NSView {
         blur.state = .active
         blur.autoresizingMask = [.width, .height]
         addSubview(blur)
+        snapshotView.wantsLayer = true
+        snapshotView.layer?.contentsGravity = .topLeft
+        snapshotView.isHidden = true
+        snapshotView.autoresizingMask = [.maxXMargin, .minYMargin]      // stays put at the top-left while resizing
+        addSubview(snapshotView)
+    }
+
+    private let snapshotView = NSView()
+
+    /// Shows a still image of the app at `frame` (this view's coordinates), e.g. while the window moves.
+    func showSnapshot(_ image: CGImage, frame: CGRect) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        snapshotView.frame = frame
+        snapshotView.layer?.contentsScale = window?.backingScaleFactor ?? 2
+        snapshotView.layer?.contents = image
+        snapshotView.isHidden = false
+        CATransaction.commit()
+    }
+
+    func hideSnapshot() {
+        snapshotView.isHidden = true
+        snapshotView.layer?.contents = nil
     }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("not used") }
     override var mouseDownCanMoveWindow: Bool { true }
@@ -95,11 +118,14 @@ final class SidebarHostingView<Content: View>: NSHostingView<Content> {
     var isOverControl: (@MainActor () -> Bool)?
     /// A double-click on empty rail space.
     var onDoubleClick: (@MainActor () -> Void)?
+    /// Any press on the rail.
+    var onPress: (@MainActor () -> Void)?
 
     override var mouseDownCanMoveWindow: Bool { false }
 
     /// A press on empty rail space drags the whole Atrium window (the rail's parent); on an icon it's a click or a reorder.
     override func mouseDown(with event: NSEvent) {
+        onPress?()
         if !(isOverControl?() ?? false), let main = (window as? RailPanel)?.atriumWindow {
             if event.clickCount == 2 { onDoubleClick?(); return }
             main.performDrag(with: event)

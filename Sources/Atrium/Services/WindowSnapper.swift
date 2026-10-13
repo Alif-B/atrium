@@ -42,6 +42,21 @@ final class WindowSnapper {
     }
 
     func isPlaced(_ slot: String) -> Bool { placed[slot] != nil }
+    func pid(of slot: String) -> pid_t? { placed[slot]?.pid }
+    var hasPlacedWindows: Bool { !placed.isEmpty }
+    var placedPIDs: Set<pid_t> { Set(placed.values.map(\.pid)) }
+    /// While Atrium moves with its apps hidden, nothing follows live; `placeAllNow` puts everything in place at the end.
+    var isSuspended = false
+
+    /// Moves every placed window to the current target right away (used after a move, while the apps are hidden).
+    func placeAllNow() {
+        let target = axTarget()
+        liveSize.removeAll()
+        for (slot, p) in placed {
+            if AX.frame(p.window) == nil { forget(slot); continue }
+            AX.setFrame(p.window, app: AX.app(p.pid), to: target)
+        }
+    }
     func placedWindow(_ slot: String) -> AXUIElement? { placed[slot]?.window }
     /// Which slot (if any) owns this window.
     func slot(for window: AXUIElement) -> String? { placed.first { CFEqual($0.value.window, window) }?.key }
@@ -155,7 +170,7 @@ final class WindowSnapper {
     /// Atrium moved or resized: carry every placed window along. The visible (active) one moves live (off the main
     /// thread, coalesced); the hidden ones (stacked behind Atrium) catch up once the drag pauses.
     func follow() {
-        guard store.isAXTrusted, !placed.isEmpty else { return }
+        guard store.isAXTrusted, !placed.isEmpty, !isSuspended else { return }
         unfittable.removeAll()
         if let active = store.activeBundleID, let p = placed[active] {
             let target = axTarget()
