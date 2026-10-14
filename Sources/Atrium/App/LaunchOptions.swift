@@ -34,6 +34,8 @@ enum LaunchOptions {
     static let debugEmpty: String? = CommandLine.arguments.first { $0.hasPrefix("--debug-empty=") }.map { String($0.dropFirst(14)) }
     /// `--debug-heal`: lose track of every window and nudge two out of place, then self-repair; log the result.
     static let debugHeal = CommandLine.arguments.contains("--debug-heal")
+    /// `--debug-resize`: drag the window's right edge and bottom-right corner with real mouse events; log the size.
+    static let debugResize = CommandLine.arguments.contains("--debug-resize")
     /// Opens the Settings window at launch (used to verify it opens).
     static let debugSettings = CommandLine.arguments.contains("--debug-settings")
 }

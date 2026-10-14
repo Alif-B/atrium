@@ -156,7 +156,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             workspace?.onShownAppGone = { [weak self] id in self?.shownAppGone(id) }
             webApps.onOpening = { [weak self] id, from in self?.showOpening(id, from: from) }
-            if LaunchOptions.debugHeal {
+            if LaunchOptions.debugResize {
+                _ = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { e in
+                    if e.type == .leftMouseDown {
+                        log.notice("app got \(e.type.rawValue) in \(e.window.map { String(describing: type(of: $0)) } ?? "no window", privacy: .public) at \(NSStringFromPoint(e.locationInWindow), privacy: .public)")
+                    }
+                    return e
+                }
+                Task { @MainActor in
+                    preloadAll()
+                    try? await Task.sleep(for: .seconds(16))
+                    let top = NSScreen.screens.first?.frame.maxY ?? 0
+                    if let vis = self.sidebar.window.screen?.visibleFrame {
+                        self.sidebar.window.setFrame(CGRect(x: vis.midX - 600, y: vis.midY - 400, width: 1200, height: 800), display: true)
+                        try? await Task.sleep(for: .seconds(2))
+                    }
+                    for (label, dx, dy) in [("left@2", -100.0, 0.0), ("corner", 60.0, 60.0), ("bottom@2", 0.0, 40.0)] {
+                        let f = self.sidebar.window.frame
+                        let x = label.hasPrefix("bottom") ? f.midX : (label == "corner" ? f.minX + 18 : f.minX + 2)
+                        let y = label.hasPrefix("left") ? top - f.midY : top - f.minY - 2
+                        log.notice("diag resize \(label, privacy: .public): before \(NSStringFromRect(f), privacy: .public)")
+                        self.sidebar.stayInFront()                       // nothing else may cover the edge being tested
+                        try? await Task.sleep(for: .milliseconds(300))
+                        let probe = CGPoint(x: x, y: y)
+                        let owner = ClickDiagnostic.frontOwner(at: probe, atrium: self.sidebar.window.windowNumber)
+                        let all = (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []).compactMap { w -> String? in
+                            guard let b = w[kCGWindowBounds as String] as? [String: Double],
+                                  CGRect(x: b["X"]!, y: b["Y"]!, width: b["Width"]!, height: b["Height"]!).contains(probe) else { return nil }
+                            return "\(w[kCGWindowOwnerName as String] ?? "?")[L\(w[kCGWindowLayer as String] ?? "")] \(Int(b["Y"]!))+\(Int(b["Height"]!))"
+                        }.prefix(4).joined(separator: ", ")
+                        log.notice("diag resize \(label, privacy: .public): at \(NSStringFromPoint(probe), privacy: .public) front \(owner, privacy: .public); stack: \(all, privacy: .public)")
+                        ClickDiagnostic.drag(from: probe, by: dx, dy: dy) {}
+                        try? await Task.sleep(for: .seconds(2))
+                        log.notice("diag resize \(label, privacy: .public): after \(NSStringFromRect(self.sidebar.window.frame), privacy: .public)")
+                    }
+                }
+            } else if LaunchOptions.debugHeal {
                 Task { @MainActor in
                     preloadAll()
                     try? await Task.sleep(for: .seconds(16))
