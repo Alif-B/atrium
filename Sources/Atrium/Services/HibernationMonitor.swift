@@ -6,18 +6,21 @@ private let log = Logger(subsystem: "com.alif.atrium", category: "hibernation")
 
 /// Quits apps that opted in to hibernation once they have gone unused for 15 minutes. "In use" means the app is the one
 /// showing in Atrium while you look at Atrium, or it is the frontmost app itself. Native apps get a normal quit request
-/// (so they can ask to save); a web app's window is closed.
+/// (so they can ask to save); a web app's page is unloaded.
 @MainActor
 final class HibernationMonitor {
     private let store: AppStore
     private let closeWebApp: @MainActor (ManagedApp) async -> Bool
+    private let webAppBusy: @MainActor (String) -> Bool
     private let idleLimit: TimeInterval
     private var lastUsed: [String: TimeInterval] = [:]
     private var task: Task<Void, Never>?
 
-    init(store: AppStore, closeWebApp: @escaping @MainActor (ManagedApp) async -> Bool, idleLimit: TimeInterval = Hibernation.idleLimit) {
+    init(store: AppStore, closeWebApp: @escaping @MainActor (ManagedApp) async -> Bool,
+         webAppBusy: @escaping @MainActor (String) -> Bool, idleLimit: TimeInterval = Hibernation.idleLimit) {
         self.store = store
         self.closeWebApp = closeWebApp
+        self.webAppBusy = webAppBusy
         self.idleLimit = idleLimit
         let interval = min(30, max(2, idleLimit / 6))             // check often enough to be on time
         task = Task { [weak self] in
@@ -28,15 +31,15 @@ final class HibernationMonitor {
         }
     }
 
-    /// In use = you're looking at it, or it is making sound / using the microphone (music, a call).
-    /// Web apps play through their browser, which can't say which window is playing: any sound from the browser keeps
-    /// all of its web apps awake.
+    /// In use = you're looking at it, or it is making sound / using the camera or microphone (music, a call).
     private func isInUse(_ app: ManagedApp, audio: Set<String>) -> Bool {
-        if audio.contains(app.browserBundleID ?? app.bundleIdentifier) { return true }
-        guard store.activeBundleID == app.bundleIdentifier else { return false }
-        guard let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return false }
-        let host = app.browserBundleID ?? app.bundleIdentifier          // a web app lives in its browser
-        return front == Bundle.main.bundleIdentifier || front == host
+        let id = app.bundleIdentifier
+        if app.isWebApp {                                              // it lives inside Atrium
+            return webAppBusy(id) || (store.activeBundleID == id && NSApp.isActive)
+        }
+        if audio.contains(id) { return true }
+        guard store.activeBundleID == id, let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return false }
+        return front == Bundle.main.bundleIdentifier || front == id
     }
 
     private func check() {

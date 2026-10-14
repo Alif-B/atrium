@@ -39,6 +39,10 @@ final class AtriumWindow: NSPanel {
     var onDoubleClick: (@MainActor () -> Void)?
     /// Window ▸ Zoom (the same as a double-click on empty space).
     var onZoom: (@MainActor () -> Void)?
+    /// True when a point (window coordinates) is over a web page shown inside Atrium.
+    var isOverWebContent: (@MainActor (NSPoint) -> Bool)?
+    /// A press on a web page shown inside Atrium: Atrium becomes the active app, so typing goes to the page.
+    var onWebContentMouseDown: (@MainActor () -> Void)?
     static let log = Logger(subsystem: "com.alif.atrium", category: "window")
 
     // A borderless window has no title-bar buttons, so AppKit's standard Close (⌘W), Minimize (⌘M) and Zoom would
@@ -124,6 +128,12 @@ final class AtriumWindow: NSPanel {
                 trackResize(grabbed, from: event)
                 return
             }
+        }
+        // A web page gets its clicks (and double-clicks) as in any browser; the window's own handling stays out of it.
+        if event.type == .leftMouseDown || event.type == .rightMouseDown, isOverWebContent?(event.locationInWindow) == true {
+            onWebContentMouseDown?()
+            super.sendEvent(event)
+            return
         }
         if event.type == .leftMouseDown, event.clickCount == 2 { onDoubleClick?(); return }
         super.sendEvent(event)
@@ -236,6 +246,22 @@ final class WindowBackdropView: NSView {
         emptyStateView = view
     }
     private var loadingView: NSView?
+    private var webContainer: NSView?
+
+    /// The web pages' container: over the card, under the snapshot and the loading cover.
+    func installWebContainer(_ view: NSView, frame: CGRect) {
+        view.frame = frame
+        view.autoresizingMask = [.width, .height]
+        if let emptyStateView { addSubview(view, positioned: .above, relativeTo: emptyStateView) }
+        else { addSubview(view, positioned: .below, relativeTo: snapshotView) }
+        webContainer = view
+    }
+
+    /// The workspace moved inside the window (the rail switched sides): the card and the pages follow.
+    func layoutWorkspace(_ frame: CGRect) {
+        if let emptyStateView, emptyStateView.frame != frame { emptyStateView.frame = frame }
+        if let webContainer, webContainer.frame != frame { webContainer.frame = frame }
+    }
 
     /// Covers the workspace (opaque, so nothing being placed behind it shows through) until `hideLoading`.
     func showLoading(frame: CGRect) {

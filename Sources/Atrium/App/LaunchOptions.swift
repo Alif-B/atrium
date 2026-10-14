@@ -36,6 +36,9 @@ enum LaunchOptions {
     static let debugHeal = CommandLine.arguments.contains("--debug-heal")
     /// `--debug-resize`: drag the window's right edge and bottom-right corner with real mouse events; log the size.
     static let debugResize = CommandLine.arguments.contains("--debug-resize")
+    /// `--debug-web`: show a web app, switch to a native app and back, click and drag on the page, reload, close and
+    /// reopen; log what is in front, focused and loaded at each step.
+    static let debugWeb = CommandLine.arguments.contains("--debug-web")
     /// Opens the Settings window at launch (used to verify it opens).
     static let debugSettings = CommandLine.arguments.contains("--debug-settings")
 }

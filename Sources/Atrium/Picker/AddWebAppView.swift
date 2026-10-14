@@ -1,7 +1,7 @@
 import SwiftUI
 import AtriumCore
 
-/// Sheet: turn a website into a sidebar app hosted in its own Microsoft Edge window.
+/// Sheet: turn a website into a sidebar app that runs inside Atrium, signed in separately from any browser.
 struct AddWebAppView: View {
     let store: AppStore
     let onDone: @MainActor () -> Void
@@ -19,7 +19,7 @@ struct AddWebAppView: View {
     @FocusState private var addressFocused: Bool
 
     private var url: URL? { WebAddress.normalize(address) }
-    private var canAdd: Bool { url != nil && !name.trimmingCharacters(in: .whitespaces).isEmpty && !working && WebAppManager.isEdgeInstalled }
+    private var canAdd: Bool { url != nil && !name.trimmingCharacters(in: .whitespaces).isEmpty && !working }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -36,7 +36,7 @@ struct AddWebAppView: View {
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Add a Web App").font(.title3.weight(.semibold))
-                    Text("Opens in its own Microsoft Edge window, with no tabs or toolbar.")
+                    Text("Runs inside Atrium, with no tabs or toolbar.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
             }
@@ -71,14 +71,11 @@ struct AddWebAppView: View {
                     .font(.footnote).foregroundStyle(pasteNote == nil ? Color.secondary : Color(nsColor: .systemOrange))
             }
 
-            Text("Links that open a new tab go to your regular Edge window. You stay signed in with your Edge profile.")
+            Text("It keeps its own sign-in, separate from your browsers. Links to other websites open in your default browser.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if !WebAppManager.isEdgeInstalled {
-                Label("Microsoft Edge isn't installed.", systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout).foregroundStyle(Color(nsColor: .systemOrange))
-            } else if let error {
+            if let error {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.callout).foregroundStyle(Color(nsColor: .systemOrange))
             }
@@ -154,7 +151,7 @@ struct AddWebAppView: View {
                 icon = await SiteIconFetcher.makeIcon(for: url, name: displayName, id: id)
             }
             store.add(ManagedApp(bundleIdentifier: id, displayName: displayName, lastKnownPath: "",
-                                 webURL: url.absoluteString, browserBundleID: WebAppManager.edgeBundleID, iconFile: icon,
+                                 webURL: url.absoluteString, iconFile: icon,
                                  customIcon: source != nil, iconSource: source, iconScale: source != nil ? scale : nil))
             working = false
             onDone()

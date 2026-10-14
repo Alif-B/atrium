@@ -13,6 +13,9 @@
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSCameraUsageDescription</key><string>Web apps in Atrium can use the camera for calls.</string>
+    <key>NSMicrophoneUsageDescription</key><string>Web apps in Atrium can use the microphone for calls.</string>
+    <key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoadsInWebContent</key><true/></dict>
     <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
 </dict>
 </plist>

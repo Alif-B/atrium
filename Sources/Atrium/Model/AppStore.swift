@@ -11,6 +11,7 @@ final class AppStore {
     var runningBundleIDs: Set<String> = []
     var activeBundleID: String? {
         didSet {
+            onActiveChange?(activeBundleID)
             if let state = emptyState, state.appID != activeBundleID {
                 emptyState = nil                                                     // moved on
                 Logger(subsystem: "com.alif.atrium", category: "store").notice("card cleared: active is now \(self.activeBundleID ?? "none", privacy: .public)")
@@ -24,6 +25,10 @@ final class AppStore {
     var launchingBundleIDs: Set<String> = []
     var badges: [String: BadgeText] = [:]
     var isAXTrusted = false
+    /// The app on show changed (web pages show and hide with it).
+    @ObservationIgnored var onActiveChange: (@MainActor (String?) -> Void)?
+    /// The list changed (added, removed, edited, reordered).
+    @ObservationIgnored var onAppsChanged: (@MainActor () -> Void)?
 
     /// Nil for the in-memory demo store: it never touches apps.json.
     @ObservationIgnored private let storageURL: URL?
@@ -53,6 +58,7 @@ final class AppStore {
     private func commit(_ library: AppLibrary) {
         apps = library.apps
         urlCache.removeAll()
+        onAppsChanged?()
         guard let storageURL else { return }
         do { try library.save(to: storageURL) } catch { log.error("save failed: \(error.localizedDescription, privacy: .public)") }
     }
@@ -103,9 +109,7 @@ final class AppStore {
     }
 
     private func lookUpURL(for app: ManagedApp) -> URL? {
-        if app.isWebApp {        // a web app "exists" while its browser is installed
-            return app.browserBundleID.flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
-        }
+        if app.isWebApp { return Bundle.main.bundleURL }      // web apps run inside Atrium: never missing
         if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleIdentifier) { return url }
         return FileManager.default.fileExists(atPath: app.lastKnownPath) ? URL(fileURLWithPath: app.lastKnownPath) : nil
     }

@@ -6,22 +6,22 @@ private let log = Logger(subsystem: "com.alif.atrium", category: "badges")
 
 /// Keeps `store.badges` current and plays a short sound when something new arrives for an app you're not looking at.
 ///  - Native apps: the badge on their Dock tile.
-///  - Web apps (Edge windows have no Dock badge): an unread count in the page title, e.g. "Inbox (3)".
+///  - Web apps (they run inside Atrium, with no Dock tile): an unread count in the page title, e.g. "Inbox (3)".
 @MainActor
 final class BadgeMonitor {
     private let store: AppStore
     private let prefs: Preferences
-    private let snapper: WindowSnapper
+    private let webTitle: @MainActor (String) -> String?
     private let dock = DockItems()
     private var task: Task<Void, Never>?
     private var primed = false                    // the first reading is the baseline: never a sound
     private var lastSound = Date.distantPast
     private var sound: NSSound?
 
-    init(store: AppStore, prefs: Preferences, snapper: WindowSnapper) {
+    init(store: AppStore, prefs: Preferences, webTitle: @escaping @MainActor (String) -> String?) {
         self.store = store
         self.prefs = prefs
-        self.snapper = snapper
+        self.webTitle = webTitle
         task = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -51,7 +51,7 @@ final class BadgeMonitor {
             let id = app.bundleIdentifier
             if app.isWebApp {
                 titleBased.insert(id)
-                readings[id] = snapper.placedWindow(id).flatMap { AX.string($0, kAXTitleAttribute) }.flatMap(TitleBadge.parse)
+                readings[id] = webTitle(id).flatMap(TitleBadge.parse)
             } else {
                 readings[id] = dockBadges[id].flatMap(BadgeText.parse)
             }
@@ -69,7 +69,7 @@ final class BadgeMonitor {
     /// No sound for an app you're already looking at (it is in front, inside Atrium).
     private func isInView(_ id: String) -> Bool {
         guard store.activeBundleID == id else { return false }
-        if app(id)?.isWebApp == true { return NSApp.isActive == false }        // its window is the front one only if Atrium isn't
+        if app(id)?.isWebApp == true { return NSApp.isActive }                 // its page shows in Atrium, in front
         return Launcher.runningApp(bundleID: id)?.isActive == true
     }
 

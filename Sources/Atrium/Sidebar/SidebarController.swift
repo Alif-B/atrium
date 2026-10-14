@@ -261,6 +261,20 @@ final class SidebarController {
         keepRailOnMain()
     }
 
+    /// Web pages live in Atrium's workspace (see WebAppHost).
+    func installWebContainer(_ view: NSView) {
+        backdrop?.installWebContainer(view, frame: layout.workspace.offsetBy(dx: -window.frame.minX, dy: -window.frame.minY))
+    }
+
+    /// A web app is on show: Atrium comes in front of everything, with keyboard focus.
+    func bringForward() {
+        if !window.isVisible { show(); return }
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.orderFrontRegardless()
+        window.makeKey()
+        keepRailOnMain()
+    }
+
     /// Keeps Atrium (and its cover) above windows that open while loading.
     func stayInFront() {
         window.orderFrontRegardless()
@@ -319,6 +333,7 @@ final class SidebarController {
 
     func relayout() {
         layout = ScreenLayout.compute(visibleFrame: window.frame, edge: prefs.sidebarEdge)
+        backdrop?.layoutWorkspace(layout.workspace.offsetBy(dx: -window.frame.minX, dy: -window.frame.minY))
         if rail.frame != layout.glass { rail.setFrame(layout.glass, display: true) }
         window.invalidateShadow()
     }

@@ -40,7 +40,7 @@ struct EmptyStateView: View {
                 .opacity(opening ? 1 : 0.7)
             VStack(spacing: 4) {
                 Text(title(state, app)).font(.title3.weight(.semibold))
-                if let detail = detail(state) {
+                if let detail = detail(state, app) {
                     Text(detail).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
             }
@@ -62,16 +62,16 @@ struct EmptyStateView: View {
         case .opening: "Opening \(app.displayName)…"
         case .quit: app.isWebApp ? "\(app.displayName) was closed" : "\(app.displayName) quit"
         case .asleep: "\(app.displayName) is asleep"
-        case .failed: "\(app.displayName) didn't open a window"
+        case .failed: app.isWebApp ? "\(app.displayName) couldn't load" : "\(app.displayName) didn't open a window"
         }
     }
 
-    private func detail(_ state: EmptyState) -> String? {
+    private func detail(_ state: EmptyState, _ app: ManagedApp) -> String? {
         switch state {
         case .opening: nil
         case .quit: "Open it again to pick up where you left off."
         case .asleep: "It was put to sleep after 15 minutes without use."
-        case .failed: "It may still be starting, or waiting in the menu bar."
+        case .failed: app.isWebApp ? "Check your internet connection, then try again." : "It may still be starting, or waiting in the menu bar."
         }
     }
 

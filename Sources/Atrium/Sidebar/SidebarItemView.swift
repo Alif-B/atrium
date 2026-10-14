@@ -150,17 +150,19 @@ struct SidebarItemView: View {
                 Button("Remove from Sidebar", role: .destructive, action: menu.remove)
             } else {
                 if !isRunning { Button("Open", action: menu.open); Divider() }
-                if app.isWebApp && isRunning { Button("Reload Page", action: menu.reload); Divider() }
-                Toggle("Snap Window When Opened", isOn: Binding(get: { app.snapWindow }, set: { _ in menu.toggleSnap() }))
-                Toggle("Open at Login", isOn: Binding(get: { app.openAtLogin }, set: { _ in menu.toggleOpenAtLogin() }))
+                if isRunning { Button(app.isWebApp ? "Reload" : "Relaunch", action: menu.reload); Divider() }
+                if !app.isWebApp {
+                    Toggle("Snap Window When Opened", isOn: Binding(get: { app.snapWindow }, set: { _ in menu.toggleSnap() }))
+                    Toggle("Open at Login", isOn: Binding(get: { app.openAtLogin }, set: { _ in menu.toggleOpenAtLogin() }))
+                }
                 Toggle("Hibernate When Unused", isOn: Binding(get: { app.hibernates }, set: { _ in menu.toggleHibernate() }))
                 if !app.isWebApp { Button("Show in Finder", action: menu.showInFinder) }
                 Button("Edit…", action: menu.edit)
                 Button("Remove from Sidebar", role: .destructive, action: menu.remove)
                 if isRunning {
                     Divider()
-                    Button(app.isWebApp ? "Minimize" : "Hide", action: menu.hide)
-                    Button(app.isWebApp ? "Close Window" : "Quit", action: menu.quit)
+                    if !app.isWebApp { Button("Hide", action: menu.hide) }
+                    Button(app.isWebApp ? "Close" : "Quit", action: menu.quit)
                 }
             }
         }

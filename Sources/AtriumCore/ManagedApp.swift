@@ -7,7 +7,7 @@ public struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
     public var lastKnownPath: String      // fallback when the bundle id can't be resolved
     public var snapWindow: Bool           // per-app opt-out
     public var openAtLogin: Bool          // launched hidden when Atrium starts
-    /// Web apps only: the site, the browser that hosts it (e.g. Microsoft Edge), and a cached icon PNG.
+    /// Web apps only: the site and a cached icon PNG. (`browserBundleID` is from when web apps ran in Edge: unused.)
     public var webURL: String?
     public var browserBundleID: String?
     public var iconFile: String?

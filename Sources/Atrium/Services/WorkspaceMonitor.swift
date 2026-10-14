@@ -11,8 +11,6 @@ final class WorkspaceMonitor {
     private let switcher: AppSwitcher
     private let onManagedActivated: @MainActor (String) -> Void
     private var observers: [NSObjectProtocol] = []
-    /// For apps that host several sidebar items (a browser with web apps): which item is in front, if any.
-    var slotResolver: (@MainActor (String) -> String?)?
     /// True while Atrium moves with its apps hidden: activation changes then are side effects, not choices.
     var isSuspended: (@MainActor () -> Bool)?
     /// The app on show quit (or crashed).
@@ -35,7 +33,7 @@ final class WorkspaceMonitor {
         func observe(_ name: NSNotification.Name, _ handler: @escaping @MainActor (String, pid_t) -> Void) {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { note in
                 // Extract Sendable values before hopping into the main-actor closure. Use the notification's own
-                // process: an app can briefly have two (e.g. the helper instance used to open an Edge web app).
+                // process: an app can briefly have two instances.
                 let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
                 let id = app?.bundleIdentifier
                 let pid = app?.processIdentifier ?? 0
@@ -61,12 +59,6 @@ final class WorkspaceMonitor {
     private func handleActivate(_ id: String) {
         if id == Bundle.main.bundleIdentifier { return }                     // clicking Atrium's own window: leave state alone
         if isSuspended?() == true { return }
-        if let slot = slotResolver?(id) {                                    // a web app's browser window came forward
-            store.activeBundleID = slot
-            prefs.lastActiveBundleID = slot
-            onManagedActivated(slot)
-            return
-        }
         guard store.apps.contains(where: { $0.bundleIdentifier == id }) else {
             // Some other app. If Atrium is showing a card for the app that just went away, this is usually macOS
             // activating "the next app" by itself: keep the card (and the lens) where they are.

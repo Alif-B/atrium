@@ -14,7 +14,7 @@ final class AppSwitcher {
     private var task: Task<Void, Never>?
     /// The app a sidebar-initiated switch is currently working on (WorkspaceMonitor uses it to avoid double handling).
     private(set) var inFlightBundleID: String?
-    /// Web apps are opened by WebAppManager (their own browser window), not by launching a bundle.
+    /// Web apps run inside Atrium (WebAppHost), not by launching a bundle.
     var openWebApp: (@MainActor (ManagedApp) -> Void)?
     /// After an app's window was brought forward: put Atrium back right under it.
     var onShown: (@MainActor () -> Void)?

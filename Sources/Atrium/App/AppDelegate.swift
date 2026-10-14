@@ -33,7 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private let crossfade = CrossfadePanel()
     private var orderCache: (slot: String, number: Int, at: Date)?
-    private var webApps: WebAppManager?
+    private var webHost: WebAppHost?
+    private var notifier: WebNotifier?
     private var addAppsWindow: HostingWindowController?
     private var settingsWindow: SettingsWindowController?
     private var editWebAppWindow: HostingWindowController?
@@ -53,7 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
-        NSApp.mainMenu = MainMenu.build(settingsTarget: self, settingsAction: #selector(openSettings))
+        NSApp.mainMenu = MainMenu.build(settingsTarget: self, settingsAction: #selector(openSettings), web: self)
         prefs = Preferences()
         store = LaunchOptions.demo ? AppStore.demo() : AppStore.persistent()
         let actions = SidebarActions(
@@ -65,13 +66,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let url = self?.store.resolvedURL(for: app) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
             },
             remove: { [weak self] app in self?.store.remove(bundleID: app.bundleIdentifier) },
-            hide: { [weak self] app in
-                if app.isWebApp { self?.webApps?.minimize(app) } else { Launcher.runningApp(bundleID: app.bundleIdentifier)?.hide() }
-            },
+            hide: { app in if !app.isWebApp { Launcher.runningApp(bundleID: app.bundleIdentifier)?.hide() } },
             quit: { [weak self] app in
-                if app.isWebApp { Task { await self?.webApps?.closeWindow(app) } } else { Launcher.runningApp(bundleID: app.bundleIdentifier)?.terminate() }
+                if app.isWebApp { self?.closeWebApp(app) } else { Launcher.runningApp(bundleID: app.bundleIdentifier)?.terminate() }
             },
-            reload: { [weak self] app in self?.webApps?.reload(app) },
+            reload: { [weak self] app in self?.reload(app) },
             edit: { [weak self] app in self?.showEditWebApp(app) })
         sidebar = SidebarController(store: store, prefs: prefs, actions: actions)
         sidebar.show()
@@ -79,31 +78,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let snapper = WindowSnapper(store: store, workspaceRect: { [weak self] in self?.sidebar.workspaceRect ?? .zero })
             self.snapper = snapper
             switcher = AppSwitcher(store: store, prefs: prefs, snapper: snapper)
-            let webApps = WebAppManager(store: store, prefs: prefs, snapper: snapper)
-            self.webApps = webApps
-            switcher.openWebApp = { app in webApps.open(app) }
-            webApps.onWebAppFocused = { [weak self] slot in self?.managedAppActivated(slot) }
-            webApps.onRaised = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
+            let webHost = WebAppHost(store: store)
+            self.webHost = webHost
+            sidebar.installWebContainer(webHost.container)
+            sidebar.window.isOverWebContent = { [weak webHost] point in webHost?.hasContent(at: point) ?? false }
+            sidebar.window.onWebContentMouseDown = { [weak self] in self?.webContentClicked() }
+            switcher.openWebApp = { [weak self] app in self?.showWebApp(app) }
+            store.onActiveChange = { [weak webHost] id in webHost?.activeChanged(id) }
+            store.onAppsChanged = { [weak webHost] in webHost?.syncApps() }
+            webHost.onReady = { [weak self] id in
+                guard let self else { return }
+                if self.store.emptyState == .opening(id) { self.store.emptyState = nil }
+                if self.store.activeBundleID == id { self.bringWebForward() }
+            }
+            webHost.onFailed = { [weak self] id in
+                if self?.store.activeBundleID == id { self?.store.emptyState = .failed(id) }
+            }
+            let notifier = WebNotifier()
+            self.notifier = notifier
+            webHost.onNotification = { [weak self] app, title, body, noteID in self?.webNotification(app, title: title, body: body, noteID: noteID) }
+            notifier.onClick = { [weak self] id, noteID in self?.webNotificationClicked(id, noteID: noteID) }
             snapper.onWindowGone = { [weak self] slot in
                 log.notice("window gone: \(slot, privacy: .public); active \(self?.store.activeBundleID ?? "none", privacy: .public)")
-                if slot.hasPrefix(ManagedApp.webAppIDPrefix) { self?.store.runningBundleIDs.remove(slot) }
-                if self?.store.activeBundleID == slot, slot.hasPrefix(ManagedApp.webAppIDPrefix) { self?.shownAppGone(slot) }
             }
             snapper.onUserResize = { [weak self] _, axFrame in self?.appResizedByUser(axFrame) }
             permissions = PermissionMonitor(store: store)
-            badgeMonitor = BadgeMonitor(store: store, prefs: prefs, snapper: snapper)
-            hibernation = HibernationMonitor(store: store, closeWebApp: { app in await webApps.closeWindow(app) },
+            badgeMonitor = BadgeMonitor(store: store, prefs: prefs, webTitle: { [weak webHost] id in webHost?.title(of: id) })
+            hibernation = HibernationMonitor(store: store, closeWebApp: { [weak self] app in self?.closeWebApp(app) ?? false },
+                                             webAppBusy: { [weak webHost] id in webHost?.isBusy(id) ?? false },
                                              idleLimit: LaunchOptions.debugHibernateSeconds.map(TimeInterval.init) ?? Hibernation.idleLimit)
             workspace = WorkspaceMonitor(
                 store: store, prefs: prefs, switcher: switcher,
                 onManagedActivated: { [weak self] id in self?.managedAppActivated(id) },
                 onTerminated: { [weak self] pid in
                     self?.snapper?.appTerminated(pid: pid)
-                    self?.webApps?.browserTerminated(pid: pid)
                 })
-            workspace?.slotResolver = { id in
-                webApps.hostsWebApps(id) ? webApps.resolveFocusedSlot(browserBundleID: id) : nil
-            }
             let mover = MoveCoordinator(store: store, snapper: snapper, sidebar: sidebar, snapshotter: snapshotter)
             self.mover = mover
             mover.onSettled = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
@@ -128,7 +137,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             workspace?.isSuspended = { mover.isMoving }
             switcher.onWillSwitch = { [weak self] from in self?.crossfadeAway(from: from) }
-            webApps.onWillSwitch = { [weak self] from in self?.crossfadeAway(from: from) }
             sidebar.onBecameKey = { [weak self] in self?.keepWorkspaceVisible(restoreLast: true, fresh: true) }
             sidebar.onCheckOrder = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
             switcher.onShown = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
@@ -157,8 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             workspace?.onShownAppGone = { [weak self] id in self?.shownAppGone(id) }
-            webApps.onOpening = { [weak self] id, from in self?.showOpening(id, from: from) }
-            if LaunchOptions.debugResize {
+            if LaunchOptions.debugWeb { runWebDiagnostic() } else if LaunchOptions.debugResize {
                 _ = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { e in
                     if e.type == .leftMouseDown {
                         log.notice("app got \(e.type.rawValue) in \(e.window.map { String(describing: type(of: $0)) } ?? "no window", privacy: .public) at \(NSStringFromPoint(e.locationInWindow), privacy: .public)")
@@ -252,7 +259,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         log.notice("diag empty \(label, privacy: .public): card \(String(describing: self.store.emptyState), privacy: .public); in front: \(owner, privacy: .public)")
                     }
                     switcher.switchTo(app); try? await Task.sleep(for: .seconds(2)); report("shown")
-                    await webApps.closeWindow(app); try? await Task.sleep(for: .seconds(1.5)); report("window closed")
+                    self.closeWebApp(app); try? await Task.sleep(for: .seconds(1.5)); report("window closed")
                     switcher.switchTo(app); try? await Task.sleep(for: .milliseconds(60)); report("reopen clicked")
                     try? await Task.sleep(for: .seconds(4)); report("a few seconds later")
                 }
@@ -354,10 +361,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let snapper, mover?.isMoving != true else { return }
         var id = store.activeBundleID
         // (Not while a card is up: the selected app is opening, or just quit; that's what Atrium should be showing.)
-        if restoreLast, store.emptyState == nil, id.map({ !snapper.isPlaced($0) }) ?? true,
-           let last = prefs.lastActiveBundleID, snapper.isPlaced(last) {
+        if restoreLast, store.emptyState == nil, id.map({ !isShowable($0) }) ?? true,
+           let last = prefs.lastActiveBundleID, isShowable(last) {
             id = last
             store.activeBundleID = last
+        }
+        // A web app shows inside Atrium itself: Atrium belongs in front (when you're using Atrium, or just clicked it).
+        if let id, isWebApp(id) {
+            guard sidebar.window.isVisible, !sidebar.window.isMiniaturized else { return }
+            if let app = store.apps.first(where: { $0.bundleIdentifier == id }), webHost?.isLoaded(id) == false, store.emptyState == nil {
+                webHost?.show(app)                                     // e.g. coming back to it after it was closed elsewhere
+            }
+            let usingAtrium = NSApp.isActive && (NSApp.keyWindow == nil || NSApp.keyWindow === sidebar.window)
+            if restoreLast || usingAtrium { bringWebForward() }
+            return
         }
         guard let id, snapper.isPlaced(id), sidebar.window.isVisible else { return }
         // During drags this runs at up to 60 Hz: reuse the number found in the last second and skip the order read.
@@ -385,24 +402,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Self-repair
 
     /// Puts things right quietly: re-attaches sidebar apps that are open but not attached (e.g. after wake, when macOS
-    /// briefly couldn't report their windows), re-adopts web-app windows, and moves everything back in place.
+    /// briefly couldn't report their windows), and moves everything back in place.
     private func heal(_ reason: String) {
-        guard store.isAXTrusted, let snapper, let webApps, mover?.isMoving != true, !sidebar.isMoving else { return }
+        guard store.isAXTrusted, let snapper, mover?.isMoving != true, !sidebar.isMoving else { return }
         var reattached = 0
         for app in store.apps where !app.isWebApp && app.snapWindow && !snapper.isPlaced(app.bundleIdentifier) {
             guard let running = Launcher.runningApp(bundleID: app.bundleIdentifier), !running.isHidden else { continue }
             snapper.snap(slot: app.bundleIdentifier, pid: running.processIdentifier, launching: false, raise: false, restoreMinimized: false)
             reattached += 1
         }
-        let webMissing = store.apps.filter { $0.isWebApp && $0.snapWindow && !snapper.isPlaced($0.bundleIdentifier) }
-        Task { @MainActor in
-            for app in webMissing { await webApps.readopt(app) }
-            snapper.fixPositions()
-            keepWorkspaceVisible(fresh: true)
-        }
-        if reattached > 0 || !webMissing.isEmpty {
-            log.notice("self-repair (\(reason, privacy: .public)): re-attaching \(reattached) app(s), looking for \(webMissing.count) web window(s)")
-        }
+        snapper.fixPositions()
+        keepWorkspaceVisible(fresh: true)
+        if reattached > 0 { log.notice("self-repair (\(reason, privacy: .public)): re-attaching \(reattached) app(s)") }
     }
 
     // MARK: Smoothness
@@ -445,9 +456,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Startup
 
-    /// Pull every sidebar app into Atrium at launch, so the first click on each one is instant:
-    /// running apps are placed quietly behind, closed apps are launched in the background, web apps get (or re-find)
-    /// their windows. Finally the last-used app comes to the front.
     /// The user is dragging the app's own edge: Atrium follows it live, and once the button is released every other
     /// app is fitted to Atrium's new size.
     private func appResizedByUser(_ axFrame: CGRect) {
@@ -463,11 +471,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Pull every sidebar app into Atrium at launch, so the first click on each one is instant:
+    /// running apps are placed quietly behind, closed apps are launched in the background, web apps start loading
+    /// inside Atrium. Finally the last-used app comes to the front.
+    ///
     /// Calm startup: Atrium covers its workspace ("Opening your apps") and stays in front while every sidebar app is
     /// placed out of sight (running apps behind Atrium, closed ones launched hidden, web apps found or opened), then
     /// the last-used app is revealed in one go. Capped so a slow app never holds the reveal back.
     private func preloadAll() {
-        guard store.isAXTrusted, let snapper, let webApps else { return }
+        guard store.isAXTrusted, let snapper, let webHost else { return }
         sidebar.showLoading()
         let keepInFront = Task { @MainActor in
             while !Task.isCancelled {
@@ -478,7 +490,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var launchedHidden: [NSRunningApplication] = []
         let work = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(300))      // let the window and monitors settle
-            // Native apps in parallel (each may wait for its window), then web apps one by one.
+            // Native apps in parallel (each may wait for its window), then web apps' pages one by one.
             var jobs: [Task<Void, Never>] = []
             // Apps set to hibernate aren't started at launch (they start when first clicked), but if one is already
             // running it is placed like any other, so it stays under Atrium's control and can go to sleep later.
@@ -499,8 +511,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 })
             }
             for job in jobs { await job.value }
-            await webApps.preload(store.apps)
-            await webApps.tidyUpDuplicates()
+            await webHost.preload(store.apps)
         }
         Task { @MainActor in
             let started = Date()
@@ -529,6 +540,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: Diagnostics
+
+    /// `--debug-web`: show a web app, switch away and back, click/drag/double-click on the page while another app is
+    /// in front, reload, close, and reopen with Reload. Logs what is in front, focused and loaded at each step.
+    private func runWebDiagnostic() {
+        Task { @MainActor in
+            preloadAll()
+            try? await Task.sleep(for: .seconds(18))
+            guard let webHost, let snapper else { return }
+            let webApps = store.apps.filter(\.isWebApp)
+            for app in webApps {
+                let id = app.bundleIdentifier
+                log.notice("diag web \(app.displayName, privacy: .public): loaded \(webHost.isLoaded(id)) ready \(webHost.isReady(id)) title \(webHost.title(of: id) ?? "-", privacy: .public)")
+            }
+            guard let web = webApps.first(where: { webHost.isReady($0.bundleIdentifier) }),
+                  let native = store.apps.first(where: { !$0.isWebApp && snapper.isPlaced($0.bundleIdentifier) }) else {
+                log.notice("diag web: need a loaded web app and a placed native app"); return
+            }
+            let top = NSScreen.screens.first?.frame.maxY ?? 0
+            @MainActor func report(_ label: String) {
+                let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "-"
+                let order = snapper.order(of: native.bundleIdentifier, against: self.sidebar.window.windowNumber)
+                let page = webHost.shownPage
+                let focused = (self.sidebar.window.firstResponder as? NSView).map { r in page.map { r.isDescendant(of: $0.webView) } ?? false } ?? false
+                log.notice("diag web \(label, privacy: .public): active \(self.store.activeBundleID ?? "none", privacy: .public); front app \(front, privacy: .public); Atrium key \(self.sidebar.window.isKeyWindow); page \(webHost.shownID ?? "none", privacy: .public) visible \(page.map { !$0.webView.isHidden } ?? false); focused \(focused); Atrium in front of \(native.displayName, privacy: .public) \(order?.atriumInFront.description ?? "?", privacy: .public); card \(String(describing: self.store.emptyState), privacy: .public)")
+            }
+            switcher.switchTo(web); try? await Task.sleep(for: .seconds(3)); report("show \(web.displayName)")
+            switcher.switchTo(native); try? await Task.sleep(for: .seconds(2)); report("show \(native.displayName)")
+            switcher.switchTo(web); try? await Task.sleep(for: .seconds(2)); report("back to \(web.displayName)")
+            if let finder = Launcher.runningApp(bundleID: "com.apple.finder") {
+                finder.activate(); try? await Task.sleep(for: .seconds(1.5)); report("Finder activated")
+            }
+            let ws = sidebar.workspaceRect
+            let center = CGPoint(x: ws.midX, y: top - ws.midY)
+            log.notice("diag web: under the pointer: \(ClickDiagnostic.frontOwner(at: center, atrium: self.sidebar.window.windowNumber), privacy: .public)")
+            let frame0 = sidebar.window.frame
+            ClickDiagnostic.drag(from: center, by: 0) {}
+            try? await Task.sleep(for: .seconds(1.5)); report("clicked the page")
+            ClickDiagnostic.drag(from: center, by: 160, dy: 40) {}
+            try? await Task.sleep(for: .seconds(2))
+            log.notice("diag web: drag on the page moved Atrium: \(self.sidebar.window.frame != frame0)")
+            ClickDiagnostic.doubleClick(at: center)
+            try? await Task.sleep(for: .seconds(1.5))
+            log.notice("diag web: double-click on the page zoomed Atrium: \(self.sidebar.window.frame != frame0)")
+            let loads = webHost.loadCount(web.bundleIdentifier)
+            reload(web); try? await Task.sleep(for: .seconds(6))
+            log.notice("diag web: Reload: loads \(loads) → \(webHost.loadCount(web.bundleIdentifier))")
+            closeWebApp(web); try? await Task.sleep(for: .seconds(1)); report("closed")
+            reload(web); try? await Task.sleep(for: .seconds(6)); report("Reload on the closed app")
+        }
+    }
 
     private func runDragDiagnostic() {
         Task { @MainActor in
@@ -588,6 +649,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let wsCenter = CGPoint(x: ws.midX, y: primaryTop - ws.midY)
             log.notice("diag: clicking \(ids[1], privacy: .public) while \(ids[0], privacy: .public) is shown")
             ClickDiagnostic.run(iconCenter: icon, atrium: sidebar.window.windowNumber, workspaceCenter: wsCenter)
+            try? await Task.sleep(for: .seconds(2))
+            log.notice("diag click result: active \(self.store.activeBundleID ?? "none", privacy: .public); front app \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "-", privacy: .public); Atrium key \(self.sidebar.window.isKeyWindow)")
         }
     }
 
@@ -663,6 +726,93 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let switcher { switcher.switchTo(app) } else { store.activeBundleID = app.bundleIdentifier }   // demo: lens only
     }
 
+    // MARK: Web apps
+
+    private func isWebApp(_ id: String) -> Bool { id.hasPrefix(ManagedApp.webAppIDPrefix) }
+
+    /// Can Atrium show this app right now: a window it has placed, or a web app (which it can always load)?
+    private func isShowable(_ id: String) -> Bool {
+        isWebApp(id) ? store.contains(bundleID: id) : snapper?.isPlaced(id) == true
+    }
+
+    /// A web app was chosen: its page comes on show inside Atrium, and Atrium comes in front with keyboard focus.
+    private func showWebApp(_ app: ManagedApp) {
+        guard let webHost else { return }
+        let id = app.bundleIdentifier
+        if store.activeBundleID != id { crossfadeAway(from: store.activeBundleID) }
+        store.activeBundleID = id
+        prefs.lastActiveBundleID = id
+        webHost.show(app)
+        store.emptyState = webHost.isReady(id) ? nil : .opening(id)           // "Opening…" until the page has drawn
+        bringWebForward()
+    }
+
+    /// Atrium in front and active, with the page focused (a web app is on show).
+    private func bringWebForward() {
+        guard let id = store.activeBundleID, isWebApp(id) else { return }
+        if !NSApp.isActive { NSApp.activate() }
+        sidebar.bringForward()
+        webHost?.focus()
+    }
+
+    /// A click on the page on show: it's the app you're using again (even if something else was in front a moment ago).
+    private func webContentClicked() {
+        if let shown = webHost?.shownID, store.activeBundleID != shown {
+            store.activeBundleID = shown
+            prefs.lastActiveBundleID = shown
+        }
+        bringWebForward()
+    }
+
+    /// Close (or hibernate) a web app: its page is unloaded; if it was on show, its card says so.
+    @discardableResult
+    private func closeWebApp(_ app: ManagedApp) -> Bool {
+        guard webHost?.close(app) == true else { return false }
+        if store.activeBundleID == app.bundleIdentifier { shownAppGone(app.bundleIdentifier) }
+        return true
+    }
+
+    /// Reload: a web app's page reloads (or opens, if it was closed); a native app quits and opens again.
+    private func reload(_ app: ManagedApp) {
+        let id = app.bundleIdentifier
+        if app.isWebApp {
+            if webHost?.isLoaded(id) == true { webHost?.reload(app) } else { switcher?.switchTo(app) }
+            return
+        }
+        guard let running = Launcher.runningApp(bundleID: id) else { switcher?.switchTo(app); return }
+        let wasShown = store.activeBundleID == id
+        running.terminate()
+        Task { @MainActor in
+            var waited = 0
+            while !running.isTerminated, waited < 100 { try? await Task.sleep(for: .milliseconds(100)); waited += 1 }
+            guard running.isTerminated else {                       // it asked to save first, or refused: leave it be
+                log.notice("relaunch: \(id, privacy: .public) didn't quit")
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+            if wasShown { switcher?.switchTo(app); return }
+            guard let url = store.resolvedURL(for: app), let snapper,
+                  let reopened = try? await Launcher.open(url, activate: false, hide: true) else { return }
+            await snapper.snapAndWait(slot: id, pid: reopened.processIdentifier, launching: true, raise: false)
+            reopened.unhide()
+        }
+    }
+
+    /// A page posted a notification: show it, unless you're looking at that app right now.
+    private func webNotification(_ app: ManagedApp, title: String, body: String, noteID: String) {
+        if store.activeBundleID == app.bundleIdentifier, NSApp.isActive, sidebar.window.isVisible { return }
+        notifier?.post(appID: app.bundleIdentifier, appName: app.displayName, title: title, body: body, noteID: noteID)
+    }
+
+    /// Clicking a notification opens its app in Atrium and lets the page go to the right place.
+    private func webNotificationClicked(_ id: String, noteID: String) {
+        guard let app = store.apps.first(where: { $0.bundleIdentifier == id }) else { return }
+        if !sidebar.window.isVisible { sidebar.show() }
+        if sidebar.window.isMiniaturized { sidebar.window.deminiaturize(nil) }
+        switcher?.switchTo(app)
+        webHost?.notificationClicked(id, noteID: noteID)
+    }
+
     @objc private func openSettings() { showSettings() }
 
     private func showSettings() {
@@ -702,5 +852,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         store.update(bundleID: app.bundleIdentifier) { $0.lastKnownPath = url.path }
+    }
+}
+
+// MARK: - View menu (the web app on show)
+
+extension AppDelegate: WebCommands {
+    private var shownWebApp: ManagedApp? {
+        guard let id = webHost?.shownID, store.activeBundleID == id else { return nil }
+        return store.apps.first { $0.bundleIdentifier == id }
+    }
+
+    @objc func reloadWebPage(_ sender: Any?) { if let app = shownWebApp { webHost?.reload(app) } }
+    @objc func webGoBack(_ sender: Any?) { webHost?.goBack() }
+    @objc func webGoForward(_ sender: Any?) { webHost?.goForward() }
+    @objc func webActualSize(_ sender: Any?) { webHost?.zoom(by: nil) }
+    @objc func webZoomIn(_ sender: Any?) { webHost?.zoom(by: DesignTokens.webZoomStep) }
+    @objc func webZoomOut(_ sender: Any?) { webHost?.zoom(by: -DesignTokens.webZoomStep) }
+    @objc func openWebPageInBrowser(_ sender: Any?) { if let url = webHost?.shownURL { NSWorkspace.shared.open(url) } }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        let webActions: [Selector] = [#selector(reloadWebPage(_:)), #selector(webGoBack(_:)), #selector(webGoForward(_:)),
+                                      #selector(webActualSize(_:)), #selector(webZoomIn(_:)), #selector(webZoomOut(_:)),
+                                      #selector(openWebPageInBrowser(_:))]
+        guard let action = menuItem.action, webActions.contains(action) else { return true }
+        guard shownWebApp != nil, let page = webHost?.shownPage else { return false }
+        if action == #selector(webGoBack(_:)) { return page.webView.canGoBack }
+        if action == #selector(webGoForward(_:)) { return page.webView.canGoForward }
+        return true
     }
 }
