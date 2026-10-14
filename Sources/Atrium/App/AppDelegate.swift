@@ -165,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             workspace?.onShownAppGone = { [weak self] id in self?.shownAppGone(id) }
-            if LaunchOptions.debugWeb { runWebDiagnostic() } else if LaunchOptions.debugResize {
+            if let dir = LaunchOptions.debugJSDir { preloadAll(); runJSConsole(dir) } else if LaunchOptions.debugDnD { runDnDDiagnostic() } else if LaunchOptions.debugWeb { runWebDiagnostic() } else if LaunchOptions.debugResize {
                 _ = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { e in
                     if e.type == .leftMouseDown {
                         log.notice("app got \(e.type.rawValue) in \(e.window.map { String(describing: type(of: $0)) } ?? "no window", privacy: .public) at \(NSStringFromPoint(e.locationInWindow), privacy: .public)")
@@ -588,6 +588,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             log.notice("diag web: Reload: loads \(loads) → \(webHost.loadCount(web.bundleIdentifier))")
             closeWebApp(web); try? await Task.sleep(for: .seconds(1)); report("closed")
             reload(web); try? await Task.sleep(for: .seconds(6)); report("Reload on the closed app")
+        }
+    }
+
+    /// `--debug-js=<folder>`: runs commands from <folder>/cmd.json against a web app's page (see LaunchOptions).
+    private func runJSConsole(_ dir: String) {
+        let cmdURL = URL(fileURLWithPath: dir).appendingPathComponent("cmd.json")
+        let outURL = URL(fileURLWithPath: dir).appendingPathComponent("out.txt")
+        @MainActor func out(_ text: String) {
+            log.notice("diag js: \(text, privacy: .public)")
+            let line = Data((text + "\n").utf8)
+            if let h = try? FileHandle(forWritingTo: outURL) { h.seekToEndOfFile(); h.write(line); try? h.close() }
+            else { try? line.write(to: outURL) }
+        }
+        Task { @MainActor in
+            while true {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let data = try? Data(contentsOf: cmdURL) else { continue }
+                try? FileManager.default.removeItem(at: cmdURL)
+                guard let cmd = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let webHost,
+                      let name = cmd["app"] as? String,
+                      let app = store.apps.first(where: { $0.isWebApp && $0.displayName.localizedCaseInsensitiveContains(name) }) else {
+                    out("bad command"); continue
+                }
+                if cmd["show"] as? Bool == true { switcher.switchTo(app); try? await Task.sleep(for: .seconds(1.5)) }
+                guard let page = webHost.page(app.bundleIdentifier) else { out("\(app.displayName) isn't loaded"); continue }
+                if let js = cmd["js"] as? String {
+                    do {
+                        let result = try await page.webView.callAsyncJavaScript("return JSON.stringify(await (async () => { \(js) })())",
+                                                                                 arguments: [:], contentWorld: .page)
+                        out("js → \(result as? String ?? String(describing: result))")
+                    } catch { out("js error: \(error)") }
+                }
+                if let d = cmd["drag"] as? [Double], d.count == 4, let window = page.webView.window {
+                    let top = NSScreen.screens.first?.frame.maxY ?? 0
+                    @MainActor func screen(_ x: Double, _ y: Double) -> CGPoint {
+                        let local = CGPoint(x: x, y: page.webView.isFlipped ? y : page.webView.bounds.height - y)
+                        let s = window.convertPoint(toScreen: page.webView.convert(local, to: nil))
+                        return CGPoint(x: s.x, y: top - s.y)
+                    }
+                    let from = screen(d[0], d[1]), to = screen(d[2], d[3])
+                    out("drag \(from) → \(to); under the pointer: \(ClickDiagnostic.frontOwner(at: from, atrium: self.sidebar.window.windowNumber))")
+                    ClickDiagnostic.drag(from: from, by: to.x - from.x, dy: to.y - from.y, steps: cmd["steps"] as? Int ?? 40) {}
+                    try? await Task.sleep(for: .seconds(3))
+                    out("drag done")
+                }
+            }
+        }
+    }
+
+    private func runDnDDiagnostic() {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard let webHost else { return }
+            let html = """
+            <html><body style="font:16px -apple-system;margin:20px"><ul id=l style="list-style:none;padding:0">
+            <li draggable=true id=A style="height:60px;background:#eee;margin:6px">A</li>
+            <li draggable=true id=B style="height:60px;background:#ddd;margin:6px">B</li>
+            <li draggable=true id=C style="height:60px;background:#ccc;margin:6px">C</li>
+            <li draggable=true id=D style="height:60px;background:#bbb;margin:6px">D</li></ul>
+            <script>
+            var log=[]; let overs=0;
+            document.addEventListener('pointerdown',e=>log.push('pdown:'+e.target.id));
+            document.addEventListener('dragstart',e=>{log.push('start:'+e.target.id);if(e.target.id==='B'){e.dataTransfer.setData('application/vnd.pdnd','')}else{e.dataTransfer.setData('application/x-only','1')}});
+            document.addEventListener('dragenter',e=>log.push('enter:'+[...e.dataTransfer.types].join('|')));document.addEventListener('dragover',e=>{e.preventDefault();if(overs++===5)log.push('over:'+[...e.dataTransfer.types].join('|'))});
+            document.addEventListener('drop',e=>{e.preventDefault();log.push('drop:'+e.target.id)});
+            document.addEventListener('dragend',e=>log.push('end:'+e.dataTransfer.dropEffect));
+            setInterval(()=>{document.title=log.join(',')+' overs='+overs},100);
+            </script></body></html>
+            """
+            let url = URL(string: "data:text/html;base64," + Data(html.utf8).base64EncodedString())!
+            let app = ManagedApp(bundleIdentifier: ManagedApp.webAppIDPrefix + "00000000-0000-0000-0000-00000000D0D0",
+                                 displayName: "DnD Test", lastKnownPath: "", webURL: url.absoluteString)
+            webHost.show(app)
+            NSApp.activate()
+            sidebar.bringForward()
+            try? await Task.sleep(for: .seconds(3))
+            guard let page = webHost.shownPage, let window = page.webView.window else { log.notice("diag dnd: no page"); return }
+            let rects = (try? await page.webView.evaluateJavaScript("['B','D'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2]})")) as? [[Double]] ?? []
+            guard rects.count == 2 else { log.notice("diag dnd: no rects"); return }
+            let top = NSScreen.screens.first?.frame.maxY ?? 0
+            @MainActor func screen(_ p: [Double]) -> CGPoint {
+                let local = CGPoint(x: p[0], y: page.webView.isFlipped ? p[1] : page.webView.bounds.height - p[1])
+                let s = window.convertPoint(toScreen: page.webView.convert(local, to: nil))
+                return CGPoint(x: s.x, y: top - s.y)
+            }
+            let from = screen(rects[0]), to = screen(rects[1])
+            log.notice("diag dnd: under the pointer \(ClickDiagnostic.frontOwner(at: from, atrium: self.sidebar.window.windowNumber), privacy: .public); dragging B → D")
+            ClickDiagnostic.drag(from: from, by: to.x - from.x, dy: to.y - from.y) {}
+            try? await Task.sleep(for: .seconds(2.5))
+            log.notice("diag dnd result (B: empty vnd.pdnd only): \(page.webView.title ?? "-", privacy: .public)")
+            _ = try? await page.webView.evaluateJavaScript("log.length=0; 0")
+            let c = (try? await page.webView.evaluateJavaScript("(()=>{const r=document.getElementById('C').getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2]})()")) as? [Double] ?? [0, 0]
+            let fromC = screen(c)
+            ClickDiagnostic.drag(from: fromC, by: to.x - fromC.x, dy: to.y - fromC.y) {}
+            try? await Task.sleep(for: .seconds(2.5))
+            log.notice("diag dnd result (C: custom type with a value only): \(page.webView.title ?? "-", privacy: .public)")
         }
     }
 

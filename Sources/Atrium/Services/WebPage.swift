@@ -24,6 +24,8 @@ final class WebPage: NSObject {
     var onNotification: (@MainActor (_ title: String, _ body: String, _ noteID: String) -> Void)?
 
     private var popups: [WebPopup] = []
+    /// What the page accepts dropped while it's hidden (put back when it shows; see `acceptsDrops`).
+    private var parkedDragTypes: [NSPasteboard.PasteboardType] = []
     private var downloads: [ObjectIdentifier: URL] = [:]
     private var readyTask: Task<Void, Never>?
 
@@ -50,10 +52,14 @@ final class WebPage: NSObject {
         config.mediaTypesRequiringUserActionForPlayback = []
         let scripts = WKUserContentController()
         scripts.addUserScript(WKUserScript(source: WebScripts.notificationShim, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        if LaunchOptions.debugWebLog {
+            scripts.addUserScript(WKUserScript(source: WebScripts.debugLog, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        }
         config.userContentController = scripts
         webView = WKWebView(frame: .zero, configuration: config)
         super.init()
         scripts.add(ScriptBridge(self), name: WebScripts.notifyHandler)
+        if LaunchOptions.debugWebLog { scripts.add(ScriptBridge(self), name: WebScripts.logHandler) }
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
@@ -90,6 +96,21 @@ final class WebPage: NSObject {
         UserDefaults.standard.set(Double(value), forKey: Self.zoomKey(id))
     }
 
+    /// Hidden pages must not take drags: macOS hands a drag to whichever view under the pointer accepts it, hidden or
+    /// not, so a ticket dragged in Jira would land in the (hidden) Gmail page lying in the same place.
+    var acceptsDrops: Bool = true {
+        didSet {
+            guard acceptsDrops != oldValue else { return }
+            if acceptsDrops {
+                if !parkedDragTypes.isEmpty { webView.registerForDraggedTypes(parkedDragTypes) }
+                parkedDragTypes = []
+            } else {
+                parkedDragTypes = webView.registeredDraggedTypes
+                webView.unregisterDraggedTypes()
+            }
+        }
+    }
+
     func notificationClicked(_ noteID: String) {
         webView.evaluateJavaScript(WebScripts.notificationClick(id: noteID), completionHandler: nil)
     }
@@ -112,7 +133,11 @@ final class WebPage: NSObject {
         webView.removeFromSuperview()
     }
 
-    fileprivate func received(_ body: Any) {
+    fileprivate func received(_ body: Any, name: String) {
+        if name == WebScripts.logHandler {
+            log.notice("page \(self.id, privacy: .public): \(body as? String ?? "?", privacy: .public)")
+            return
+        }
         guard let note = body as? [String: Any] else { return }
         onNotification?(note["title"] as? String ?? "", note["body"] as? String ?? "", note["id"] as? String ?? "")
     }
@@ -278,7 +303,7 @@ private final class ScriptBridge: NSObject, WKScriptMessageHandler {
     init(_ page: WebPage) { self.page = page }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        page?.received(message.body)
+        page?.received(message.body, name: message.name)
     }
 }
 

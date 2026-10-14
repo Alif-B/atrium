@@ -45,6 +45,7 @@ final class WebAppHost {
     func isBusy(_ id: String) -> Bool { busy.contains(id) }
     func loadCount(_ id: String) -> Int { pages[id]?.loads ?? 0 }
     var shownPage: WebPage? { shownID.flatMap { pages[$0] } }
+    func page(_ id: String) -> WebPage? { pages[id] }
 
     /// Starts the app's page out of sight (if it isn't running yet).
     @discardableResult
@@ -64,6 +65,7 @@ final class WebAppHost {
         }
         page.webView.frame = container.bounds
         container.addSubview(page.webView)
+        page.acceptsDrops = false                                  // hidden until it's on show
         pages[id] = page
         knownStores[id] = WebPage.storeID(for: app)
         store.runningBundleIDs.insert(id)
@@ -175,6 +177,14 @@ final class WebAppHost {
         for (id, page) in pages {
             let visible = id == shownID && page.isReady
             if page.webView.isHidden == visible { page.webView.isHidden = !visible }
+            page.acceptsDrops = visible
+        }
+        // macOS gives a drag to the topmost view under the pointer, hidden or not: the page on show must be on top.
+        // (Reordering in place: no page leaves the window, so none reloads or flickers.)
+        if let top = container.subviews.last, top.isHidden, container.subviews.contains(where: { !$0.isHidden }) {
+            container.sortSubviews({ a, b, _ in
+                a.isHidden == b.isHidden ? .orderedSame : (a.isHidden ? .orderedAscending : .orderedDescending)
+            }, context: nil)
         }
     }
 

@@ -1,6 +1,46 @@
 /// JavaScript put into every web app page.
 enum WebScripts {
     static let notifyHandler = "atriumNotify"
+    static let logHandler = "atriumLog"
+
+    /// Diagnostics only (`--debug-weblog`): what the page sees during drag-and-drop, plus errors and failed requests.
+    static let debugLog = """
+    (() => {
+      const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.\(logHandler);
+      if (!h || window.__atriumLog) return;
+      window.__atriumLog = true;
+      const say = (s) => { try { h.postMessage(String(s).slice(0, 500)); } catch (_) {} };
+      const d = (el) => {
+        if (!el || !el.tagName) return String(el);
+        const id = el.getAttribute && (el.getAttribute('data-testid') || el.getAttribute('data-component-selector') || el.id);
+        return el.tagName.toLowerCase() + (id ? '[' + id + ']' : '');
+      };
+      const dt = (e) => e.dataTransfer ? ' types=' + [...e.dataTransfer.types].join('|') + ' effect=' + e.dataTransfer.dropEffect + '/' + e.dataTransfer.effectAllowed : '';
+      let last = 0, overs = 0;
+      for (const t of ['dragstart', 'dragenter', 'dragleave', 'drop', 'dragend']) {
+        window.addEventListener(t, (e) => {
+          if ((t === 'dragenter' || t === 'dragleave') && Date.now() - last < 120) return;
+          last = Date.now();
+          say(t + ' ' + d(e.target) + ' x=' + e.clientX + ' y=' + e.clientY + ' atPoint=' + d(document.elementFromPoint(e.clientX, e.clientY)) + ' screen=' + e.screenX + ',' + e.screenY + dt(e) + ' handled=' + e.defaultPrevented);
+        });
+      }
+      window.addEventListener('dragover', (e) => { if (++overs % 30 === 0) say('dragover #' + overs + ' ' + d(e.target) + ' y=' + e.clientY + ' handled=' + e.defaultPrevented); });
+      window.addEventListener('pointerdown', (e) => say('pointerdown ' + d(e.target) + ' x=' + e.clientX + ' y=' + e.clientY + ' screen=' + e.screenX + ',' + e.screenY), true);
+      window.addEventListener('error', (e) => say('error ' + e.message + ' @' + e.filename + ':' + e.lineno));
+      window.addEventListener('unhandledrejection', (e) => say('rejection ' + ((e.reason && (e.reason.stack || e.reason.message)) || e.reason)));
+      const ce = console.error;
+      console.error = function (...a) { say('console.error ' + a.map(String).join(' ')); return ce.apply(this, a); };
+      const of = window.fetch;
+      window.fetch = function (...a) {
+        const req = a[0], url = (req && req.url) || String(req), method = ((a[1] && a[1].method) || (req && req.method) || 'GET').toUpperCase();
+        const quiet = method === 'GET' || /analytics|gasv3|metal|xpsearch|telemetry|events/.test(url);
+        return of.apply(this, a).then((r) => {
+          if (!quiet || !r.ok) say('fetch ' + method + ' ' + r.status + ' ' + url.split('?')[0]);
+          return r;
+        }, (err) => { say('fetch FAILED ' + method + ' ' + url.split('?')[0] + ' ' + err); throw err; });
+      };
+    })();
+    """
 
     /// Web pages inside an app view have no notifications of their own. This gives them the standard `Notification`
     /// API (always allowed); each one is passed to Atrium, which shows it as a Mac notification. Clicking that calls

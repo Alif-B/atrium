@@ -51,14 +51,14 @@ enum ClickDiagnostic {
     }
 
     /// Posts a real drag (press, move in steps, release) starting at `from` (Quartz coordinates).
-    static func drag(from: CGPoint, by dx: CGFloat, dy: CGFloat = 0, then done: @escaping @Sendable () -> Void) {
+    static func drag(from: CGPoint, by dx: CGFloat, dy: CGFloat = 0, steps: Int = 20, then done: @escaping @Sendable () -> Void) {
         DispatchQueue.global(qos: .userInteractive).async {
             func post(_ type: CGEventType, _ p: CGPoint) {
                 CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
             }
             post(.mouseMoved, from); usleep(80_000)
             post(.leftMouseDown, from); usleep(60_000)
-            for i in 1...20 { post(.leftMouseDragged, CGPoint(x: from.x + dx * CGFloat(i) / 20, y: from.y + dy * CGFloat(i) / 20)); usleep(16_000) }
+            for i in 1...steps { post(.leftMouseDragged, CGPoint(x: from.x + dx * CGFloat(i) / CGFloat(steps), y: from.y + dy * CGFloat(i) / CGFloat(steps))); usleep(16_000) }
             usleep(60_000)
             post(.leftMouseUp, CGPoint(x: from.x + dx, y: from.y + dy))
             usleep(400_000)

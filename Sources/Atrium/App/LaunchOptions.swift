@@ -39,6 +39,14 @@ enum LaunchOptions {
     /// `--debug-web`: show a web app, switch to a native app and back, click and drag on the page, reload, close and
     /// reopen; log what is in front, focused and loaded at each step.
     static let debugWeb = CommandLine.arguments.contains("--debug-web")
+    /// `--debug-dnd`: show a local test page with a draggable list inside Atrium, drag an item with real mouse events,
+    /// and log which drag-and-drop events the page received.
+    static let debugDnD = CommandLine.arguments.contains("--debug-dnd")
+    /// `--debug-weblog`: web pages report drag-and-drop events, errors and failed saves to Atrium's log.
+    static let debugWebLog = CommandLine.arguments.contains("--debug-weblog")
+    /// `--debug-js=<folder>`: Atrium watches <folder>/cmd.json ({"app": name, "show": bool, "js": code, "drag": [x1,y1,x2,y2],
+    /// "steps": n}) and runs it against that web app's page (coordinates are page coordinates); results go to <folder>/out.txt.
+    static let debugJSDir: String? = CommandLine.arguments.first { $0.hasPrefix("--debug-js=") }.map { String($0.dropFirst(11)) }
     /// Opens the Settings window at launch (used to verify it opens).
     static let debugSettings = CommandLine.arguments.contains("--debug-settings")
 }
