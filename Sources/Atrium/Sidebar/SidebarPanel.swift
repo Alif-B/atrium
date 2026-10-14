@@ -1,4 +1,5 @@
 import AppKit
+import AtriumCore
 import OSLog
 import SwiftUI
 
@@ -50,8 +51,9 @@ final class AtriumWindow: NSPanel {
     // A non-activating borderless panel doesn't get AppKit's edge resizing, so Atrium does it itself: the outer few
     // points of the window (inside its margin, never over the app) resize it, with the system's resize cursors.
 
-    /// The outer 4 pt of the margin: the app window's own (invisible) resize zone reaches into the inner part.
-    static let resizeBand: CGFloat = 4
+    /// The whole margin around the app. Where the app window's own (invisible) resize zone reaches over it and the app
+    /// is in front, the app takes the drag instead, and Atrium follows it (`SidebarController.wrap`).
+    static let resizeBand: CGFloat = LayoutConstants.gap
     static let cornerBand: CGFloat = 24            // covers the rounded corner (26 pt radius): clicks outside the curve pass through
 
     struct Edges: OptionSet {
@@ -159,6 +161,34 @@ final class RailPanel: NSPanel {
 /// on the edge only resizes (the window server moves windows by their draggable areas on its own).
 final class EdgeGuardView: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
+}
+
+/// The window's corners are rounded, and clicks on fully transparent pixels fall through to whatever is behind: just
+/// outside the curve, a corner drag would land on another app. These squares sit behind the rounded backdrop with a
+/// barely-there fill (invisible, but enough for the window server to keep the click), so the corners can be grabbed.
+final class CornerGripView: NSView {
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    static func container(around backdrop: NSView) -> NSView {
+        let container = NSView(frame: backdrop.frame)
+        let side = DesignTokens.windowCornerRadius, w = backdrop.frame.width, h = backdrop.frame.height
+        let corners: [(CGRect, NSView.AutoresizingMask)] = [
+            (CGRect(x: 0, y: 0, width: side, height: side), [.maxXMargin, .maxYMargin]),
+            (CGRect(x: w - side, y: 0, width: side, height: side), [.minXMargin, .maxYMargin]),
+            (CGRect(x: 0, y: h - side, width: side, height: side), [.maxXMargin, .minYMargin]),
+            (CGRect(x: w - side, y: h - side, width: side, height: side), [.minXMargin, .minYMargin]),
+        ]
+        for (rect, mask) in corners {
+            let grip = CornerGripView(frame: rect)
+            grip.wantsLayer = true
+            grip.layer?.backgroundColor = NSColor(white: 0, alpha: DesignTokens.cornerGripAlpha).cgColor
+            grip.autoresizingMask = mask
+            container.addSubview(grip)
+        }
+        backdrop.autoresizingMask = [.width, .height]
+        container.addSubview(backdrop)
+        return container
+    }
 }
 
 /// Rounded, softly translucent backdrop for the whole window. Visible in the gaps and while no app is snapped in.

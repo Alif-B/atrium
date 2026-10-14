@@ -12,6 +12,7 @@ enum DesignTokens {
 
     static let sidebarCornerRadius: CGFloat = 24
     static let windowCornerRadius: CGFloat = 26      // Tahoe window radius; the rail (24) sits inside it
+    static let cornerGripAlpha: CGFloat = 0.01       // just enough for clicks outside the rounded corner to land on Atrium
     static let defaultWindowSize = CGSize(width: 1180, height: 760)
     static let iconSize: CGFloat = 40
     static let lensCornerRadius: CGFloat = 14

@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var switcher: AppSwitcher!
     private var snapper: WindowSnapper?
     private var workspace: WorkspaceMonitor?
+    private var resizeSettleTask: Task<Void, Never>?
     private var permissions: PermissionMonitor?
     private var badgeMonitor: BadgeMonitor?
     private var hibernation: HibernationMonitor?
@@ -88,6 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if slot.hasPrefix(ManagedApp.webAppIDPrefix) { self?.store.runningBundleIDs.remove(slot) }
                 if self?.store.activeBundleID == slot, slot.hasPrefix(ManagedApp.webAppIDPrefix) { self?.shownAppGone(slot) }
             }
+            snapper.onUserResize = { [weak self] _, axFrame in self?.appResizedByUser(axFrame) }
             permissions = PermissionMonitor(store: store)
             badgeMonitor = BadgeMonitor(store: store, prefs: prefs, snapper: snapper)
             hibernation = HibernationMonitor(store: store, closeWebApp: { app in await webApps.closeWindow(app) },
@@ -168,15 +170,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     try? await Task.sleep(for: .seconds(16))
                     let top = NSScreen.screens.first?.frame.maxY ?? 0
                     if let vis = self.sidebar.window.screen?.visibleFrame {
-                        self.sidebar.window.setFrame(CGRect(x: vis.midX - 600, y: vis.midY - 400, width: 1200, height: 800), display: true)
+                        self.sidebar.window.setFrame(CGRect(x: vis.midX - 450, y: vis.midY - 350, width: 900, height: 700), display: true)
                         try? await Task.sleep(for: .seconds(2))
                     }
-                    for (label, dx, dy) in [("left@2", -100.0, 0.0), ("corner", 60.0, 60.0), ("bottom@2", 0.0, 40.0)] {
+                    // Inside the 8 pt margin, where the app's own outer resize zone takes the drag.
+                    for (label, dx, dy) in [("bottom@6", 0.0, 40.0), ("right@6", -80.0, 0.0), ("top@6", 0.0, -30.0),
+                                            ("corner-br@5", 40.0, 40.0), ("left@2", -60.0, 0.0), ("top@7", 0.0, -20.0)] {
                         let f = self.sidebar.window.frame
-                        let x = label.hasPrefix("bottom") ? f.midX : (label == "corner" ? f.minX + 18 : f.minX + 2)
-                        let y = label.hasPrefix("left") ? top - f.midY : top - f.minY - 2
+                        let x: CGFloat, y: CGFloat
+                        switch label {
+                        case "bottom@6": (x, y) = (f.midX, top - f.minY - 6)
+                        case "right@6": (x, y) = (f.maxX - 6, top - f.midY)
+                        case "top@6": (x, y) = (f.midX, top - f.maxY + 6)
+                        case "corner-br@5": (x, y) = (f.maxX - 6, top - f.minY - 6)     // outside the curve, Atrium in front
+                        case "top@7": (x, y) = (f.midX, top - f.maxY + 7)
+                        default: (x, y) = (f.minX + 2, top - f.midY)
+                        }
                         log.notice("diag resize \(label, privacy: .public): before \(NSStringFromRect(f), privacy: .public)")
-                        self.sidebar.stayInFront()                       // nothing else may cover the edge being tested
+                        // "@6": the app in front, as in normal use (its outer resize zone takes the drag); otherwise Atrium.
+                        if label.hasSuffix("@6") { self.keepWorkspaceVisible(fresh: true) } else { self.sidebar.stayInFront() }
                         try? await Task.sleep(for: .milliseconds(300))
                         let probe = CGPoint(x: x, y: y)
                         let owner = ClickDiagnostic.frontOwner(at: probe, atrium: self.sidebar.window.windowNumber)
@@ -188,7 +200,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         log.notice("diag resize \(label, privacy: .public): at \(NSStringFromPoint(probe), privacy: .public) front \(owner, privacy: .public); stack: \(all, privacy: .public)")
                         ClickDiagnostic.drag(from: probe, by: dx, dy: dy) {}
                         try? await Task.sleep(for: .seconds(2))
-                        log.notice("diag resize \(label, privacy: .public): after \(NSStringFromRect(self.sidebar.window.frame), privacy: .public)")
+                        let fitted = self.store.activeBundleID.flatMap { self.snapper?.placedWindow($0) }.flatMap { AX.frame($0) }
+                        log.notice("diag resize \(label, privacy: .public): frontmost \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "-", privacy: .public)")
+                        log.notice("diag resize \(label, privacy: .public): after \(NSStringFromRect(self.sidebar.window.frame), privacy: .public); app \(fitted.map { NSStringFromRect($0) } ?? "none", privacy: .public) target \(NSStringFromRect(self.snapper?.axTarget() ?? .zero), privacy: .public)")
                     }
                 }
             } else if LaunchOptions.debugHeal {
@@ -434,6 +448,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Pull every sidebar app into Atrium at launch, so the first click on each one is instant:
     /// running apps are placed quietly behind, closed apps are launched in the background, web apps get (or re-find)
     /// their windows. Finally the last-used app comes to the front.
+    /// The user is dragging the app's own edge: Atrium follows it live, and once the button is released every other
+    /// app is fitted to Atrium's new size.
+    private func appResizedByUser(_ axFrame: CGRect) {
+        guard mover?.isMoving != true, let primary = NSScreen.screens.first?.frame else { return }
+        sidebar.wrap(around: ScreenLayout.axRect(fromCocoa: axFrame, primaryScreenFrame: primary))   // the flip is its own inverse
+        resizeSettleTask?.cancel()
+        resizeSettleTask = Task { [weak self] in
+            while NSEvent.pressedMouseButtons != 0, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(50)) }
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled, let self else { return }
+            self.snapper?.fixPositions()
+            self.keepWorkspaceVisible()
+        }
+    }
+
     /// Calm startup: Atrium covers its workspace ("Opening your apps") and stays in front while every sidebar app is
     /// placed out of sight (running apps behind Atrium, closed ones launched hidden, web apps found or opened), then
     /// the last-used app is revealed in one go. Capped so a slow app never holds the reveal back.

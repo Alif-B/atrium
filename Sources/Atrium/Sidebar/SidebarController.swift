@@ -62,7 +62,7 @@ final class SidebarController {
         host.onPress = { [weak self] in self?.watchFastNow() }
 
         let backdrop = WindowBackdropView(frame: CGRect(origin: .zero, size: size))
-        window.contentView = backdrop
+        window.contentView = CornerGripView.container(around: backdrop)
         self.backdrop = backdrop
         glassView.cornerRadius = DesignTokens.sidebarCornerRadius
         glassView.contentView = host
@@ -294,6 +294,28 @@ final class SidebarController {
 
     /// The rectangle (Cocoa screen coordinates) the active app's window should fill.
     var workspaceRect: CGRect { layout.workspace }
+
+    /// The user resized the app by its own edge (`app` in Cocoa coordinates): wrap Atrium around it, keeping the same
+    /// margins and rail. Quietly: this is not an Atrium move, so its apps stay visible.
+    func wrap(around app: CGRect) {
+        let f = window.frame, ws = layout.workspace
+        var new = CGRect(x: app.minX - (ws.minX - f.minX), y: app.minY - (ws.minY - f.minY),
+                         width: app.width + (f.width - ws.width), height: app.height + (f.height - ws.height))
+        // Below Atrium's minimum, hold the edge that isn't being dragged (the app is fitted back on release).
+        if new.width < window.minSize.width {
+            new.origin.x = abs(app.minX - ws.minX) > abs(app.maxX - ws.maxX) ? f.maxX - window.minSize.width : f.minX
+            new.size.width = window.minSize.width
+        }
+        if new.height < window.minSize.height {
+            new.origin.y = abs(app.minY - ws.minY) > abs(app.maxY - ws.maxY) ? f.maxY - window.minSize.height : f.minY
+            new.size.height = window.minSize.height
+        }
+        new = new.integral
+        guard new != f else { return }
+        window.setFrame(new, display: true)
+        lastWatchedFrame = window.frame
+        relayout()
+    }
 
     func relayout() {
         layout = ScreenLayout.compute(visibleFrame: window.frame, edge: prefs.sidebarEdge)

@@ -30,11 +30,15 @@ final class WindowSnapper {
     /// Windows that refused the target size (e.g. an app minimum larger than Atrium's area). We stop fighting them
     /// until the next snap or Atrium move, so we never loop forever.
     private var unfittable: Set<String> = []
+    /// Windows the user is resizing by their own edge right now (Atrium follows them).
+    private var userResizing: Set<String> = []
 
     /// Called after a window was fitted, so Atrium can slot itself under it.
     var onSnapped: (@MainActor () -> Void)?
     /// Called when a placed window is closed (so web apps can show as "not running").
     var onWindowGone: (@MainActor (String) -> Void)?
+    /// The user is resizing a placed window by its own edge (AX frame): Atrium grows or shrinks around it instead.
+    var onUserResize: (@MainActor (String, CGRect) -> Void)?
 
     init(store: AppStore, workspaceRect: @escaping @MainActor () -> CGRect) {
         self.store = store
@@ -115,9 +119,26 @@ final class WindowSnapper {
     /// `apply` is a no-op when the window is already in place, so there is no feedback loop.
     private func windowChangedExternally(slot: String, notification: String) {
         if notification == kAXUIElementDestroyedNotification { forget(slot); return }
+        // macOS 26 windows have a resize zone reaching outside their frame, over Atrium's edge: a drag there resizes
+        // the app, not Atrium. Treat it as resizing Atrium (only while a button is held, so an app adjusting its own
+        // size never moves Atrium).
+        if notification == kAXResizedNotification, !isSuspended,
+           NSEvent.pressedMouseButtons != 0 || userResizing.contains(slot),
+           let p = placed[slot], let f = AX.frame(p.window), !matches(f, axTarget()) {
+            userResizing.insert(slot)
+            onUserResize?(slot, f)
+        }
         restoreTasks[slot]?.cancel()
         restoreTasks[slot] = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(200))
+            while NSEvent.pressedMouseButtons != 0, !Task.isCancelled {      // never fight a drag still in progress
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            // The app's last size often arrives just after the button is released: Atrium takes that one too.
+            if !Task.isCancelled, let self, self.userResizing.remove(slot) != nil,
+               let p = self.placed[slot], let f = AX.frame(p.window), !self.matches(f, self.axTarget()) {
+                self.onUserResize?(slot, f)
+            }
             guard !Task.isCancelled, let self, let p = self.placed[slot], !self.unfittable.contains(slot) else { return }
             self.apply(p.window, app: AX.app(p.pid))
             if let f = AX.frame(p.window), !self.matches(f, self.axTarget()) {
