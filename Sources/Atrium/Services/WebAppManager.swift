@@ -73,6 +73,11 @@ final class WebAppManager {
         }
     }
 
+    /// Self-repair: find this web app's window again (by its remembered number, or its title) without opening a new one.
+    func readopt(_ app: ManagedApp) async {
+        _ = await ensureWindow(for: app, activate: false, create: false)
+    }
+
     /// Startup: find (or create) every web app's window and place it quietly behind, so clicks are instant later.
     func preload(_ apps: [ManagedApp]) async {
         // A hibernating web app isn't opened at launch, but if its window is still open (Atrium restarted) it is

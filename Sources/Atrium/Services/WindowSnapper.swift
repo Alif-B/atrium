@@ -43,17 +43,42 @@ final class WindowSnapper {
 
     func isPlaced(_ slot: String) -> Bool { placed[slot] != nil }
     func pid(of slot: String) -> pid_t? { placed[slot]?.pid }
+
+    /// When a window's position couldn't be read, first seen when. Right after wake or a display change macOS's
+    /// Accessibility interface can fail for a moment: that is not a closed window. A real close arrives as a
+    /// "destroyed" notification; a failed read only counts once it has kept failing for a while.
+    private var unreadableSince: [String: Date] = [:]
+
+    private func isGone(_ slot: String, _ p: Placed) -> Bool {
+        if AX.frame(p.window) != nil { unreadableSince[slot] = nil; return false }
+        let since = unreadableSince[slot] ?? Date()
+        unreadableSince[slot] = since
+        guard Date().timeIntervalSince(since) > 5, NSRunningApplication(processIdentifier: p.pid)?.isTerminated ?? true else {
+            return true                       // skip it this time, but keep tracking it
+        }
+        unreadableSince[slot] = nil
+        forget(slot)
+        return true
+    }
     var hasPlacedWindows: Bool { !placed.isEmpty }
     var placedPIDs: Set<pid_t> { Set(placed.values.map(\.pid)) }
     /// While Atrium moves with its apps hidden, nothing follows live; `placeAllNow` puts everything in place at the end.
     var isSuspended = false
+
+    /// Puts back any placed window that isn't where it should be (and leaves the rest untouched).
+    func fixPositions() {
+        for (slot, p) in placed where !isGone(slot, p) {
+            if AX.bool(p.window, kAXMinimizedAttribute) == true { continue }
+            apply(p.window, app: AX.app(p.pid))
+        }
+    }
 
     /// Moves every placed window to the current target right away (used after a move, while the apps are hidden).
     func placeAllNow() {
         let target = axTarget()
         liveSize.removeAll()
         for (slot, p) in placed {
-            if AX.frame(p.window) == nil { forget(slot); continue }
+            if isGone(slot, p) { continue }
             AX.setFrame(p.window, app: AX.app(p.pid), to: target)
         }
     }
@@ -64,6 +89,9 @@ final class WindowSnapper {
     func appTerminated(pid: pid_t) {
         for (slot, p) in placed where p.pid == pid { forget(slot) }
     }
+
+    /// Developer aid: drop every window, as if macOS had briefly lost them all (what happened on wake).
+    func forgetAllForTesting() { for slot in Array(placed.keys) { forget(slot) } }
 
     func forget(_ slot: String) {
         guard placed.removeValue(forKey: slot) != nil else { return }
@@ -107,10 +135,10 @@ final class WindowSnapper {
 
     /// Native apps: find the app's main window (waiting if it is launching or reopening) and fit it.
     /// `raise: false` places it quietly behind (used when preloading everything at startup).
-    func snap(slot: String, pid: pid_t, launching: Bool, raise: Bool = true) {
+    func snap(slot: String, pid: pid_t, launching: Bool, raise: Bool = true, restoreMinimized: Bool = true) {
         guard store.isAXTrusted else { return }
         tasks[slot]?.cancel()
-        tasks[slot] = Task { await run(slot: slot, pid: pid, launching: launching, raise: raise) }
+        tasks[slot] = Task { await run(slot: slot, pid: pid, launching: launching, raise: raise, restoreMinimized: restoreMinimized) }
     }
 
     /// Awaitable variant (startup preloading places apps one by one).
@@ -118,7 +146,7 @@ final class WindowSnapper {
         await run(slot: slot, pid: pid, launching: launching, raise: raise)
     }
 
-    private func run(slot: String, pid: pid_t, launching: Bool, raise: Bool) async {
+    private func run(slot: String, pid: pid_t, launching: Bool, raise: Bool, restoreMinimized: Bool = true) async {
         let app = AX.app(pid)
         let deadline = Date().addingTimeInterval(launching ? 20 : 5)
         var window: AXUIElement?
@@ -128,6 +156,7 @@ final class WindowSnapper {
         }
         guard !Task.isCancelled else { return }
         guard let window else { log.notice("no window for \(slot, privacy: .public) before timeout"); return }
+        if !restoreMinimized, AX.bool(window, kAXMinimizedAttribute) == true { return }   // you minimized it: leave it
         await place(slot: slot, pid: pid, window: window, raise: raise)
     }
 
@@ -184,7 +213,7 @@ final class WindowSnapper {
             guard !Task.isCancelled else { return }
             self.liveSize.removeAll()            // next drag re-sends size once, in case an app nudged it
             for (slot, p) in self.placed {
-                if AX.frame(p.window) == nil { self.forget(slot); continue }          // window was closed
+                if self.isGone(slot, p) { continue }
                 self.apply(p.window, app: AX.app(p.pid))
             }
         }

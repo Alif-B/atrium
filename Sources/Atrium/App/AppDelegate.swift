@@ -20,6 +20,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mover: MoveCoordinator?
     private var workDone = false
     private var appObservers: [NSObjectProtocol] = []
+    private var healTimer: Task<Void, Never>?
+
+    private func healSoon(_ reason: String) {
+        Task { @MainActor in
+            for delay in [2, 6] {
+                try? await Task.sleep(for: .seconds(delay))
+                heal(reason)
+            }
+        }
+    }
     private let crossfade = CrossfadePanel()
     private var orderCache: (slot: String, number: Int, at: Date)?
     private var webApps: WebAppManager?
@@ -127,9 +137,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.keepWorkspaceVisible()
             }
             switcher.onOpening = { [weak self] id, from in self?.showOpening(id, from: from) }
+            // Self-repair after wake and display changes (twice: things settle in stages), and every 30 s.
+            let wsCenter = NSWorkspace.shared.notificationCenter
+            for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
+                appObservers.append(wsCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.healSoon("wake") }
+                })
+            }
+            appObservers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                                                        object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.healSoon("displays changed") }
+            })
+            healTimer = Task { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(30), tolerance: .seconds(5))
+                    self?.heal("routine check")
+                }
+            }
             workspace?.onShownAppGone = { [weak self] id in self?.shownAppGone(id) }
             webApps.onOpening = { [weak self] id, from in self?.showOpening(id, from: from) }
-            if let id = LaunchOptions.debugEmpty {
+            if LaunchOptions.debugHeal {
+                Task { @MainActor in
+                    preloadAll()
+                    try? await Task.sleep(for: .seconds(16))
+                    guard let snapper = self.snapper else { return }
+                    @MainActor func count() -> (Int, Int) {
+                        let t = snapper.axTarget(); var placedN = 0, inPlace = 0
+                        for app in self.store.apps {
+                            guard let w = snapper.placedWindow(app.bundleIdentifier) else { continue }
+                            placedN += 1
+                            if let f = AX.frame(w), abs(f.minX - t.minX) < 2, abs(f.minY - t.minY) < 2 { inPlace += 1 }
+                        }
+                        return (placedN, inPlace)
+                    }
+                    let before = count()
+                    // Nudge two windows out of place, then lose track of everything.
+                    var nudged = 0
+                    for app in self.store.apps where nudged < 2 {
+                        guard let w = snapper.placedWindow(app.bundleIdentifier), let pid = snapper.pid(of: app.bundleIdentifier),
+                              var f = AX.frame(w) else { continue }
+                        f.origin.x -= 300; f.origin.y += 120
+                        AX.setFrame(w, app: AX.app(pid), to: f); nudged += 1
+                    }
+                    snapper.forgetAllForTesting()
+                    log.notice("diag heal: before \(before.0) tracked/\(before.1) in place; nudged \(nudged), now tracking \(count().0)")
+                    self.heal("test")
+                    try? await Task.sleep(for: .seconds(8))
+                    let after = count()
+                    log.notice("diag heal: after repair \(after.0) tracked, \(after.1) in place")
+                }
+            } else if let id = LaunchOptions.debugEmpty {
                 Task { @MainActor in
                     preloadAll()
                     try? await Task.sleep(for: .seconds(16))
@@ -274,6 +331,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sidebar.show()
         switcher?.bringLastActiveForward()
         return false
+    }
+
+    // MARK: Self-repair
+
+    /// Puts things right quietly: re-attaches sidebar apps that are open but not attached (e.g. after wake, when macOS
+    /// briefly couldn't report their windows), re-adopts web-app windows, and moves everything back in place.
+    private func heal(_ reason: String) {
+        guard store.isAXTrusted, let snapper, let webApps, mover?.isMoving != true, !sidebar.isMoving else { return }
+        var reattached = 0
+        for app in store.apps where !app.isWebApp && app.snapWindow && !snapper.isPlaced(app.bundleIdentifier) {
+            guard let running = Launcher.runningApp(bundleID: app.bundleIdentifier), !running.isHidden else { continue }
+            snapper.snap(slot: app.bundleIdentifier, pid: running.processIdentifier, launching: false, raise: false, restoreMinimized: false)
+            reattached += 1
+        }
+        let webMissing = store.apps.filter { $0.isWebApp && $0.snapWindow && !snapper.isPlaced($0.bundleIdentifier) }
+        Task { @MainActor in
+            for app in webMissing { await webApps.readopt(app) }
+            snapper.fixPositions()
+            keepWorkspaceVisible(fresh: true)
+        }
+        if reattached > 0 || !webMissing.isEmpty {
+            log.notice("self-repair (\(reason, privacy: .public)): re-attaching \(reattached) app(s), looking for \(webMissing.count) web window(s)")
+        }
     }
 
     // MARK: Smoothness
