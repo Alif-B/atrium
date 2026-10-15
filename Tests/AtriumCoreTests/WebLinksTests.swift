@@ -38,3 +38,13 @@ private let jira = URL(string: "https://intime-soft.atlassian.net/jira/software"
     #expect(WebLinks.keepsPopup(URL(string: "https://mail.google.com/print")!, home: gmail))
     #expect(!WebLinks.keepsPopup(URL(string: "https://example.com")!, home: gmail))
 }
+
+@Test func aSignInWindowFromALinkHandsBackToTheApp() {
+    let signIn = URL(string: "https://accounts.google.com/v3/signin")!
+    let done = URL(string: "https://mail.google.com/mail/u/0/")!
+    #expect(WebLinks.popupStep(url: signIn, home: gmail, openedByLink: true) == .stay)
+    #expect(WebLinks.popupStep(url: done, home: gmail, openedByLink: true) == .toApp)
+    #expect(WebLinks.popupStep(url: URL(string: "https://example.com")!, home: gmail, openedByLink: true) == .external)
+    // Opened by the page's own script ("Continue with Google"): the page is waiting on that window; leave it alone.
+    #expect(WebLinks.popupStep(url: done, home: gmail, openedByLink: false) == .stay)
+}

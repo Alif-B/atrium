@@ -229,8 +229,15 @@ extension WebPage: WKUIDelegate {
             return nil
         case .popup, .undecided:
             let popup = WebPopup(configuration: configuration, features: windowFeatures, home: home,
-                                 undecided: url.map { !WebLinks.keepsPopup($0, home: home) } ?? true, near: webView.window)
+                                 undecided: url.map { !WebLinks.keepsPopup($0, home: home) } ?? true,
+                                 openedByLink: action.navigationType == .linkActivated, near: webView.window)
             popup.onClose = { [weak self, weak popup] in self?.popups.removeAll { $0 === popup } }
+            popup.onSignedIn = { [weak self] url in                   // the window shares this page's sign-in
+                guard let self else { return }
+                self.webView.load(URLRequest(url: url))
+                NSApp.activate()
+                self.webView.window?.makeKeyAndOrderFront(nil)
+            }
             popups.append(popup)
             return popup.webView
         }
@@ -326,12 +333,17 @@ final class WebPopup: NSObject {
     let webView: WKWebView
     let window: NSWindow
     var onClose: (@MainActor () -> Void)?
+    /// A sign-in opened from a link finished: the app's page should go to this address (and this window closes).
+    var onSignedIn: (@MainActor (URL) -> Void)?
     private let home: URL
     private var undecided: Bool
+    private let openedByLink: Bool
 
-    init(configuration: WKWebViewConfiguration, features: WKWindowFeatures, home: URL, undecided: Bool, near parent: NSWindow?) {
+    init(configuration: WKWebViewConfiguration, features: WKWindowFeatures, home: URL, undecided: Bool, openedByLink: Bool,
+         near parent: NSWindow?) {
         self.home = home
         self.undecided = undecided
+        self.openedByLink = openedByLink
         webView = WKWebView(frame: .zero, configuration: configuration)
         let size = CGSize(width: features.width.map { CGFloat($0.doubleValue) } ?? DesignTokens.webPopupSize.width,
                           height: features.height.map { CGFloat($0.doubleValue) } ?? DesignTokens.webPopupSize.height)
@@ -381,7 +393,18 @@ extension WebPopup: WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
         return .cancel
     }
 
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { window.title = webView.title ?? "" }
+    /// Judged on the page the window finally lands on: a sign-in passes through one-time steps on the app's own site
+    /// (Google's ".../accounts/SetOSID") that must finish here, not be replayed in the app.
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        window.title = webView.title ?? ""
+        guard let url = webView.url else { return }
+        switch WebLinks.popupStep(url: url, home: home, openedByLink: openedByLink) {
+        case .stay: return
+        case .toApp: onSignedIn?(url)
+        case .external: NSWorkspace.shared.open(url)
+        }
+        window.close()
+    }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {

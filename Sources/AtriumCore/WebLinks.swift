@@ -10,6 +10,13 @@ public enum WebLinks {
         case ignore
     }
 
+    /// Where a sign-in window goes next.
+    public enum PopupStep: Equatable, Sendable {
+        case stay           // still signing in (or a page that needs its window)
+        case toApp          // signed in and on its way back to the app: the app's own page goes there instead
+        case external
+    }
+
     public enum Navigation: Equatable, Sendable {
         case allow
         case external
@@ -68,6 +75,13 @@ public enum WebLinks {
         if !isWebScheme(url) { return isLinkClick || isMainFrame ? .external : .cancel }   // mailto:, zoommtg:, slack:…
         if isMainFrame, isLinkClick, !isSameSite(url, as: home), !isSignIn(url) { return .external }
         return .allow                                            // redirects (sign-in, SSO) and frames go anywhere
+    }
+
+    /// A sign-in window opened from a link ("Sign in"), not by the page's script, has no page waiting on it: once it
+    /// leaves the sign-in pages, the sign-in is done and the app's own page should carry on from there.
+    public static func popupStep(url: URL, home: URL, openedByLink: Bool) -> PopupStep {
+        guard openedByLink, isWebScheme(url), !isBlank(url), !isSignIn(url) else { return .stay }
+        return isSameSite(url, as: home) ? .toApp : .external
     }
 
     /// A blank popup got its first real address: keep it as a window, or hand the address to the default browser.
