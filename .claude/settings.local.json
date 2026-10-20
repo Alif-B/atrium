@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(mkdir -p \"/Users/alif/Desktop/AI Mission Control/docs\")",
-      "Bash(cp /Users/alif/.claude/plans/snug-yawning-peacock.md \"/Users/alif/Desktop/AI Mission Control/docs/PLAN.md\")"
-    ]
-  }
-}

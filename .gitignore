@@ -3,3 +3,4 @@ build/
 Resources/AppIcon.iconset/
 .DS_Store
 .toolchain-fix/
+.claude/settings.local.json
