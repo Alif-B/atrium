@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="38 0 1200 700" width="1200" height="700" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif">
+  <defs>
+    <linearGradient id="wall" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2b2a6b"/>
+      <stop offset="0.5" stop-color="#5b3fb0"/>
+      <stop offset="1" stop-color="#c06bd6"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.25" cy="0.2" r="0.7">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rail" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.22"/>
+    </linearGradient>
+    <linearGradient id="railEdge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.25"/>
+    </linearGradient>
+    <linearGradient id="lens" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.65"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.35"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="24" stdDeviation="28" flood-color="#120a3a" flood-opacity="0.45"/>
+    </filter>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#1a1040" flood-opacity="0.25"/>
+    </filter>
+    <linearGradient id="iMail" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5ab8ff"/><stop offset="1" stop-color="#1f6fe5"/></linearGradient>
+    <linearGradient id="iChat" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b78cff"/><stop offset="1" stop-color="#6b3fe0"/></linearGradient>
+    <linearGradient id="iNotes" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe27a"/><stop offset="1" stop-color="#f5b41f"/></linearGradient>
+    <linearGradient id="iCode" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4a4f63"/><stop offset="1" stop-color="#22252f"/></linearGradient>
+    <linearGradient id="iMusic" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff7a9a"/><stop offset="1" stop-color="#f0285a"/></linearGradient>
+    <linearGradient id="iTasks" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6fe29a"/><stop offset="1" stop-color="#22a45a"/></linearGradient>
+    <clipPath id="appClip"><rect x="262" y="94" width="856" height="532" rx="18"/></clipPath>
+  </defs>
+
+  <!-- Desktop -->
+  <rect x="38" width="1200" height="700" rx="28" fill="url(#wall)"/>
+  <rect x="38" width="1200" height="700" rx="28" fill="url(#glow)"/>
+
+  <!-- Atrium window -->
+  <g filter="url(#shadow)">
+    <rect x="150" y="86" width="976" height="548" rx="26" fill="#ffffff" fill-opacity="0.16" stroke="#ffffff" stroke-opacity="0.35"/>
+  </g>
+
+  <!-- Glass rail -->
+  <rect x="158" y="94" width="88" height="532" rx="24" fill="url(#rail)" stroke="url(#railEdge)" stroke-width="1.2"/>
+
+  <!-- Lens behind the active icon -->
+  <rect x="166" y="174" width="72" height="72" rx="18" fill="url(#lens)" stroke="#ffffff" stroke-opacity="0.8" filter="url(#soft)"/>
+
+  <!-- Icons -->
+  <g filter="url(#soft)">
+    <!-- Chat -->
+    <rect x="178" y="110" width="48" height="48" rx="12" fill="url(#iChat)"/>
+    <path d="M190 124 h24 a4 4 0 0 1 4 4 v12 a4 4 0 0 1 -4 4 h-14 l-7 6 v-6 h-3 a4 4 0 0 1 -4 -4 v-12 a4 4 0 0 1 4 -4z" fill="#fff"/>
+    <!-- Mail (active) -->
+    <rect x="178" y="186" width="48" height="48" rx="12" fill="url(#iMail)"/>
+    <rect x="188" y="199" width="28" height="21" rx="3" fill="#fff"/>
+    <path d="M188 201 l14 10 l14 -10" fill="none" stroke="#1f6fe5" stroke-width="2.4" stroke-linejoin="round"/>
+    <!-- Notes -->
+    <rect x="178" y="262" width="48" height="48" rx="12" fill="url(#iNotes)"/>
+    <rect x="190" y="274" width="24" height="25" rx="3" fill="#fff"/>
+    <path d="M195 282 h14 M195 287 h14 M195 292 h9" stroke="#e0a011" stroke-width="2" stroke-linecap="round"/>
+    <!-- Code -->
+    <rect x="178" y="338" width="48" height="48" rx="12" fill="url(#iCode)"/>
+    <path d="M196 352 l-8 10 l8 10 M208 352 l8 10 l-8 10" fill="none" stroke="#9fe0ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Music (asleep: greyed) -->
+    <g opacity="0.55">
+      <rect x="178" y="414" width="48" height="48" rx="12" fill="#9a9aa6"/>
+      <path d="M198 448 v-20 l14 -4 v18" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="195" cy="448" r="4.5" fill="#fff"/><circle cx="209" cy="442" r="4.5" fill="#fff"/>
+    </g>
+    <!-- Tasks -->
+    <rect x="178" y="490" width="48" height="48" rx="12" fill="url(#iTasks)"/>
+    <path d="M190 514 l8 8 l16 -16" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Badges -->
+  <g font-size="11" font-weight="700" text-anchor="middle">
+    <rect x="212" y="104" width="22" height="16" rx="8" fill="#ff3b30"/><text x="223" y="116" fill="#fff">3</text>
+    <rect x="212" y="256" width="22" height="16" rx="8" fill="#ff3b30"/><text x="223" y="268" fill="#fff">12</text>
+  </g>
+
+  <!-- Rail divider and settings gear -->
+  <rect x="180" y="566" width="44" height="1.2" fill="#ffffff" fill-opacity="0.6"/>
+  <g transform="translate(202 594)" fill="none" stroke="#ffffff" stroke-opacity="0.9" stroke-width="2.2">
+    <circle r="6"/><circle r="11" stroke-dasharray="4 3.2"/>
+  </g>
+
+
+  <!-- The app on show (a placeholder mail app) -->
+  <g clip-path="url(#appClip)">
+    <rect x="262" y="94" width="856" height="532" fill="#fbfbfd"/>
+    <!-- toolbar -->
+    <rect x="262" y="94" width="856" height="52" fill="#f2f2f7"/>
+    <circle cx="286" cy="120" r="6" fill="#ff5f57"/><circle cx="306" cy="120" r="6" fill="#febc2e"/><circle cx="326" cy="120" r="6" fill="#28c840"/>
+    <rect x="560" y="108" width="260" height="24" rx="8" fill="#e5e5ea"/>
+    <text x="580" y="125" font-size="12" fill="#8e8e93">Search</text>
+    <!-- sidebar -->
+    <rect x="262" y="146" width="190" height="480" fill="#f5f5fa"/>
+    <g font-size="13" fill="#3a3a44">
+      <rect x="274" y="160" width="166" height="30" rx="8" fill="#dfe6ff"/>
+      <text x="290" y="180" font-weight="600" fill="#1f4fd8">Inbox</text><text x="420" y="180" fill="#1f4fd8" text-anchor="end" font-weight="600">3</text>
+      <text x="290" y="214">Starred</text>
+      <text x="290" y="244">Sent</text>
+      <text x="290" y="274">Drafts</text>
+      <text x="290" y="304">Archive</text>
+    </g>
+    <!-- list -->
+    <g>
+      <rect x="452" y="146" width="320" height="480" fill="#ffffff"/>
+      <rect x="452" y="146" width="320" height="76" fill="#eef3ff"/>
+      <circle cx="480" cy="174" r="5" fill="#2f6bff"/>
+      <rect x="494" y="164" width="140" height="10" rx="5" fill="#2a2a33"/>
+      <rect x="494" y="182" width="240" height="8" rx="4" fill="#9a9aa6"/>
+      <rect x="494" y="198" width="190" height="8" rx="4" fill="#c4c4cc"/>
+      <circle cx="480" cy="250" r="5" fill="#2f6bff"/>
+      <rect x="494" y="240" width="110" height="10" rx="5" fill="#2a2a33"/>
+      <rect x="494" y="258" width="230" height="8" rx="4" fill="#9a9aa6"/>
+      <rect x="494" y="274" width="170" height="8" rx="4" fill="#c4c4cc"/>
+      <rect x="494" y="316" width="150" height="10" rx="5" fill="#55555f"/>
+      <rect x="494" y="334" width="220" height="8" rx="4" fill="#b0b0b8"/>
+      <rect x="494" y="350" width="160" height="8" rx="4" fill="#d4d4da"/>
+      <rect x="494" y="392" width="120" height="10" rx="5" fill="#55555f"/>
+      <rect x="494" y="410" width="236" height="8" rx="4" fill="#b0b0b8"/>
+      <rect x="494" y="426" width="150" height="8" rx="4" fill="#d4d4da"/>
+      <rect x="494" y="468" width="160" height="10" rx="5" fill="#55555f"/>
+      <rect x="494" y="486" width="210" height="8" rx="4" fill="#b0b0b8"/>
+      <rect x="494" y="502" width="180" height="8" rx="4" fill="#d4d4da"/>
+      <rect x="452" y="146" width="1" height="480" fill="#e5e5ea"/>
+      <rect x="772" y="146" width="1" height="480" fill="#e5e5ea"/>
+    </g>
+    <!-- reading pane -->
+    <g>
+      <circle cx="812" cy="186" r="18" fill="#c9d6ff"/>
+      <rect x="842" y="172" width="150" height="12" rx="6" fill="#2a2a33"/>
+      <rect x="842" y="192" width="100" height="8" rx="4" fill="#9a9aa6"/>
+      <rect x="796" y="236" width="290" height="8" rx="4" fill="#c4c4cc"/>
+      <rect x="796" y="254" width="270" height="8" rx="4" fill="#c4c4cc"/>
+      <rect x="796" y="272" width="284" height="8" rx="4" fill="#c4c4cc"/>
+      <rect x="796" y="290" width="180" height="8" rx="4" fill="#c4c4cc"/>
+      <rect x="796" y="326" width="276" height="8" rx="4" fill="#c4c4cc"/>
+      <rect x="796" y="344" width="250" height="8" rx="4" fill="#c4c4cc"/>
+      <rect x="796" y="362" width="140" height="8" rx="4" fill="#c4c4cc"/>
+      <rect x="796" y="408" width="96" height="30" rx="10" fill="#2f6bff"/>
+      <text x="844" y="428" font-size="13" font-weight="600" fill="#fff" text-anchor="middle">Reply</text>
+    </g>
+  </g>
+  <rect x="262" y="94" width="856" height="532" rx="18" fill="none" stroke="#000" stroke-opacity="0.08"/>
+  <!-- Hover label (over the app, as the real one floats above everything) -->
+  <g filter="url(#soft)">
+    <rect x="254" y="196" width="66" height="28" rx="14" fill="#ffffff" fill-opacity="0.92" stroke="#ffffff"/>
+    <text x="287" y="215" font-size="13" font-weight="600" fill="#2a2440" text-anchor="middle">Mail</text>
+  </g>
+</svg>
