@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hibernation: HibernationMonitor?
     private let snapshotter = WindowSnapshotter()
     private var mover: MoveCoordinator?
+    private let missionControl = MissionControlMonitor()
     private var workDone = false
     private var appObservers: [NSObjectProtocol] = []
     private var healTimer: Task<Void, Never>?
@@ -136,10 +137,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.keepWorkspaceVisible()
             }
             workspace?.isSuspended = { mover.isMoving }
+            missionControl.isWanted = { [weak self] in
+                guard let self, let snapper = self.snapper else { return false }
+                return self.sidebar.window.isVisible && !self.sidebar.window.isMiniaturized && snapper.hasPlacedWindows
+            }
+            missionControl.onChange = { open in if open { mover.missionControlOpened() } else { mover.missionControlClosed() } }
+            missionControl.start()
             switcher.onWillSwitch = { [weak self] from in self?.crossfadeAway(from: from) }
             sidebar.onBecameKey = { [weak self] in self?.keepWorkspaceVisible(restoreLast: true, fresh: true) }
             sidebar.onCheckOrder = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
-            switcher.onShown = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
+            switcher.onShown = { [weak self] in
+                self?.keepWorkspaceVisible(fresh: true)
+                self?.refreshSnapshotSoon()
+            }
             sidebar.onMainMouseDown = { [weak self] in self?.keepWorkspaceVisible(restoreLast: true, fresh: true) }
             snapper.onSnapped = { [weak self] in
                 // The app's window arrived: the opening card goes away underneath it.
@@ -162,6 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(30), tolerance: .seconds(5))
                     self?.heal("routine check")
+                    if self?.mover?.isMoving != true { self?.refreshSnapshot() }     // Mission Control shows it
                 }
             }
             workspace?.onShownAppGone = { [weak self] id in self?.shownAppGone(id) }
@@ -442,6 +453,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         snapshotter.refresh(windowNumber: number)
     }
 
+    /// A fresh picture once the app on show has settled (Mission Control and moving show it).
+    private func refreshSnapshotSoon() {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(700))
+            if self.mover?.isMoving != true { self.refreshSnapshot() }
+        }
+    }
+
     /// Fade from the app that's leaving to the one coming in.
     private func crossfadeAway(from slot: String?) {
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
@@ -526,6 +545,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sidebar.hideLoading()
             keepWorkspaceVisible(fresh: true)
             log.notice("startup preload finished")
+            refreshSnapshotSoon()
             // Screen Recording powers the smooth moving and switching. Ask once, now, never in the middle of an action.
             if !WindowSnapshotter.hasPermission, !UserDefaults.standard.bool(forKey: "askedForScreenRecording") {
                 UserDefaults.standard.set(true, forKey: "askedForScreenRecording")
