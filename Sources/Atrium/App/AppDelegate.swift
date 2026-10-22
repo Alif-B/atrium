@@ -141,7 +141,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self, let snapper = self.snapper else { return false }
                 return self.sidebar.window.isVisible && !self.sidebar.window.isMiniaturized && snapper.hasPlacedWindows
             }
-            missionControl.onChange = { open in if open { mover.missionControlOpened() } else { mover.missionControlClosed() } }
+            missionControl.onChange = { [weak self] open in
+                self?.sidebar.railAttached = open                         // the rail and the window as one tile
+                if open { mover.missionControlOpened() } else { mover.missionControlClosed() }
+            }
             missionControl.start()
             switcher.onWillSwitch = { [weak self] from in self?.crossfadeAway(from: from) }
             sidebar.onBecameKey = { [weak self] in self?.keepWorkspaceVisible(restoreLast: true, fresh: true) }

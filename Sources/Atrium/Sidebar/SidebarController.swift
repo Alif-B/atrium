@@ -43,6 +43,13 @@ final class SidebarController {
     var onWillClose: (@MainActor () -> Void)?
     var onShown: (@MainActor () -> Void)?
     private(set) var isMoving = false
+    /// Keeps the rail attached to the main window (Mission Control).
+    var railAttached = false {
+        didSet {
+            guard railAttached != oldValue, window.isVisible, !window.isMiniaturized else { return }
+            if railAttached, rail.parent == nil { window.addChildWindow(rail, ordered: .above) }
+        }
+    }
     private var backdrop: WindowBackdropView?
 
     init(store: AppStore, prefs: Preferences, actions: SidebarActions) {
@@ -173,10 +180,11 @@ final class SidebarController {
         }
         let busy = NSEvent.pressedMouseButtons != 0 || window.inLiveResize || Date().timeIntervalSince(lastFrameChange) < 0.5
         if busy != watchingFast { scheduleWatch(fast: busy) }
-        // Attach the rail only while the window is actually moving or resizing (so it follows exactly).
-        let moving = window.inLiveResize || Date().timeIntervalSince(lastFrameChange) < 0.5
-        if moving != (rail.parent != nil) {
-            if moving { window.addChildWindow(rail, ordered: .above) } else { window.removeChildWindow(rail) }
+        // Attach the rail only while the window is actually moving or resizing (so it follows exactly), or while
+        // Mission Control is open (so it shows the rail and the window as one).
+        let attach = railAttached || window.inLiveResize || Date().timeIntervalSince(lastFrameChange) < 0.5
+        if attach != (rail.parent != nil) {
+            if attach { window.addChildWindow(rail, ordered: .above) } else { window.removeChildWindow(rail) }
         }
         if !watchingFast {
             slowTicks += 1
