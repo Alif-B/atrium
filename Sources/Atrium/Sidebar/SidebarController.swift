@@ -43,11 +43,16 @@ final class SidebarController {
     var onWillClose: (@MainActor () -> Void)?
     var onShown: (@MainActor () -> Void)?
     private(set) var isMoving = false
-    /// Keeps the rail attached to the main window (Mission Control).
-    var railAttached = false {
+    /// The rail steps out of sight (Mission Control: it would show as a window of its own, apart from Atrium's).
+    var railHidden = false {
         didSet {
-            guard railAttached != oldValue, window.isVisible, !window.isMiniaturized else { return }
-            if railAttached, rail.parent == nil { window.addChildWindow(rail, ordered: .above) }
+            guard railHidden != oldValue else { return }
+            if railHidden {
+                if rail.parent != nil { window.removeChildWindow(rail) }
+                rail.orderOut(nil)
+            } else {
+                keepRailOnMain()
+            }
         }
     }
     private var backdrop: WindowBackdropView?
@@ -180,9 +185,8 @@ final class SidebarController {
         }
         let busy = NSEvent.pressedMouseButtons != 0 || window.inLiveResize || Date().timeIntervalSince(lastFrameChange) < 0.5
         if busy != watchingFast { scheduleWatch(fast: busy) }
-        // Attach the rail only while the window is actually moving or resizing (so it follows exactly), or while
-        // Mission Control is open (so it shows the rail and the window as one).
-        let attach = railAttached || window.inLiveResize || Date().timeIntervalSince(lastFrameChange) < 0.5
+        // Attach the rail only while the window is actually moving or resizing (so it follows exactly).
+        let attach = !railHidden && (window.inLiveResize || Date().timeIntervalSince(lastFrameChange) < 0.5)
         if attach != (rail.parent != nil) {
             if attach { window.addChildWindow(rail, ordered: .above) } else { window.removeChildWindow(rail) }
         }
@@ -298,7 +302,7 @@ final class SidebarController {
     }
 
     private func keepRailOnMain() {
-        guard window.isVisible, !window.isMiniaturized else { return }
+        guard window.isVisible, !window.isMiniaturized, !railHidden else { return }
         rail.order(.above, relativeTo: window.windowNumber)
     }
 

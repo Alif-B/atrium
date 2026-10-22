@@ -117,6 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let mover = MoveCoordinator(store: store, snapper: snapper, sidebar: sidebar, snapshotter: snapshotter)
             self.mover = mover
             mover.onSettled = { [weak self] in self?.keepWorkspaceVisible(fresh: true) }
+            mover.shownSlot = { [weak self] in self?.shownSlot }
             sidebar.onMoveBegan = { mover.began() }
             sidebar.onMoveEnded = { mover.ended() }
             sidebar.onWillMinimize = { mover.conceal(.minimized) }
@@ -142,7 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return self.sidebar.window.isVisible && !self.sidebar.window.isMiniaturized && snapper.hasPlacedWindows
             }
             missionControl.onChange = { [weak self] open in
-                self?.sidebar.railAttached = open                         // the rail and the window as one tile
+                self?.sidebar.railHidden = open                           // one tile: the window, without a separate rail
                 if open { mover.missionControlOpened() } else { mover.missionControlClosed() }
             }
             missionControl.start()
@@ -450,10 +451,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// The app Atrium's workspace shows: the current one, or (while you're in another app) the last one used there.
+    private var shownSlot: String? { store.activeBundleID ?? prefs.lastActiveBundleID }
+
     /// Keep a recent still image of the app on show (used while moving and for the switch crossfade).
     private func refreshSnapshot() {
-        guard let snapper, let id = store.activeBundleID, let number = snapper.windowNumber(slot: id) else { return }
-        snapshotter.refresh(windowNumber: number)
+        guard let snapper, let id = shownSlot, let number = snapper.windowNumber(slot: id) else { return }
+        snapshotter.refresh(windowNumber: number, slot: id)
     }
 
     /// A fresh picture once the app on show has settled (Mission Control and moving show it).

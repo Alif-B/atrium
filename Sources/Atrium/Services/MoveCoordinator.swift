@@ -23,9 +23,14 @@ final class MoveCoordinator {
     private var activeAtStart: String?
     /// Mission Control: whether you were using Atrium (or one of its apps) when it opened.
     private var mcFromAtrium = false
+    private var mcPending: Task<Void, Never>?
+    /// Mission Control can come at any moment: an older picture of the app is better than an empty window.
+    static let missionControlPictureAge: TimeInterval = 1800
 
     /// Apps are hidden and Atrium is showing its image (or nothing): don't follow, reorder or react to activations.
     var isMoving: Bool { !reasons.isEmpty }
+    /// The app Atrium's workspace shows, even while you're in another app (its picture fills Atrium meanwhile).
+    var shownSlot: (@MainActor () -> String?)?
     /// Called once everything is back in place (Atrium re-slots itself under the app).
     var onSettled: (@MainActor () -> Void)?
 
@@ -52,13 +57,30 @@ final class MoveCoordinator {
     func missionControlOpened() {
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
         mcFromAtrium = front == ProcessInfo.processInfo.processIdentifier || front.map(snapper.placedPIDs.contains) == true
-        conceal(.missionControl)
+        // No recent picture of the app on show: take one first (a fraction of a second), while it's still visible.
+        guard let slot = store.activeBundleID ?? shownSlot?(),
+              snapshotter.image(forSlot: slot, maxAge: Self.missionControlPictureAge) == nil,
+              let number = snapper.windowNumber(slot: slot) else {
+            conceal(.missionControl)
+            return
+        }
+        mcPending = Task { @MainActor in
+            await snapshotter.capture(windowNumber: number, slot: slot)
+            guard !Task.isCancelled else { return }
+            self.mcPending = nil
+            self.conceal(.missionControl)
+        }
     }
 
     /// Back from Mission Control. The app you were on gets focus again, unless you clicked another app's window there.
     /// (Leaving without a click, by Escape or a gesture, lets macOS bring forward whatever window is on top, which with
     /// Atrium's apps still hidden is some other app: that's not your choice, so it's undone.)
     func missionControlClosed() {
+        if let pending = mcPending {                                   // closed before anything was hidden
+            pending.cancel()
+            mcPending = nil
+            return
+        }
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let pickedAtrium = front == ProcessInfo.processInfo.processIdentifier
         let clicked = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown) < 1
@@ -71,17 +93,15 @@ final class MoveCoordinator {
         guard first, store.isAXTrusted, snapper.hasPlacedWindows else { return }
         snapper.isSuspended = true
         activeAtStart = store.activeBundleID
-        // Mission Control can come at any moment: an older picture of the app is better than an empty window.
-        let maxAge: TimeInterval = reason == .missionControl ? 1800 : 120
+        let maxAge: TimeInterval = reason == .missionControl ? Self.missionControlPictureAge : 120
         var pictured = false
-        if let id = activeAtStart, let number = snapper.windowNumber(slot: id),
-           let image = snapshotter.image(forWindow: number, maxAge: maxAge) {
+        if let id = activeAtStart ?? shownSlot?(), let image = snapshotter.image(forSlot: id, maxAge: maxAge) {
             sidebar.showSnapshot(image)
             pictured = true
         }
         hiddenByUs = snapper.placedPIDs.compactMap { NSRunningApplication(processIdentifier: $0) }.filter { !$0.isHidden }
         for app in hiddenByUs { app.hide() }
-        log.notice("concealed (\(String(describing: reason), privacy: .public)): hid \(self.hiddenByUs.count) apps; still image \(pictured) (Screen Recording allowed: \(WindowSnapshotter.hasPermission))")
+        log.notice("concealed (\(String(describing: reason), privacy: .public)): hid \(self.hiddenByUs.count) apps; still image \(pictured)")
     }
 
     /// - restoreFocus: give the app you were on its focus back (not when you went on to another app meanwhile).
